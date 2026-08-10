@@ -31,7 +31,7 @@ class ColoredFormatter(logging.Formatter):
         return formatter.format(record)
 
 class Logger:
-    def __init__(self, name='atri-bot', log_level=logging.DEBUG):
+    def __init__(self, name='atri-bot', log_level=logging.INFO):
 
         self.logger: logging.Logger = logging.getLogger(name)
         self.logger.setLevel(log_level)

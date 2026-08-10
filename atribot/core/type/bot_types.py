@@ -1,4 +1,6 @@
-﻿import time
+﻿from __future__ import annotations
+
+import time
 from abc import ABC
 from typing import TYPE_CHECKING, Any, Generic, NotRequired, Optional, TypedDict, TypeVar
 

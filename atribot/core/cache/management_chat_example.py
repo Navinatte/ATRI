@@ -1,8 +1,14 @@
+from __future__ import annotations
+
 import datetime
 from logging import Logger
-from typing import TYPE_CHECKING, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List
 
-from atribot.common_utils import url_to_audio_mp3, url_to_image_jpeg, url_to_video_mp4
+from atribot.common_utils import (
+    refresh_image_download_url,
+    url_to_audio_mp3,
+    url_to_video_mp4,
+)
 from atribot.core.atri_config import atriConfig
 from atribot.core.cache.context_lifecycle_manager import ContextLifecycleManager
 from atribot.core.event_bus.rule import Rule
@@ -332,6 +338,7 @@ class ChatManager(ServiceBase):
         including_pictures: bool = False,
         including_audios: bool = False,
         including_videos: bool = False,
+        send_client: Any | None = None,
     ) -> MessageBuilder:
         """添加群消息，附带构造
 
@@ -347,6 +354,7 @@ class ChatManager(ServiceBase):
                               False = 使用 MediaProcessor 转为文本描述
             including_videos: True = 保留 DEFAULT_INCLUDING_VIDEOS 条实际视频；
                               False = 使用 MediaProcessor 转为文本描述
+            send_client: 发送客户端(用于刷新过期的 QQ 图片下载链接)
 
         Returns:
             MessageBuilder: 构造完成的消息构建器
@@ -379,25 +387,43 @@ class ChatManager(ServiceBase):
 
                 elif isinstance(segment, ImageSegment):
                     if remaining_pictures > 0:
-                        if url := segment.url or segment.file.file:
-                            result = await url_to_image_jpeg(url, file_name=segment.file_name)
-                            if result is not None:
-                                builder.add_image_base64_left(result.data, result.mime)
-                            else:
-                                builder.add_image_left(url)
-                            remaining_pictures -= 1
+                        new_url = await refresh_image_download_url(
+                            segment.file_name,
+                            send_client,
+                            self.logger,
+                        )
+                        if new_url:
+                            builder.add_image_left(new_url)
+                        elif segment.text_description or segment.summary:
+                            desc = segment.text_description or segment.summary
+                            builder.add_text_left(
+                                f"[CQ:image,file={segment.file_name or 'unknown'},summary:{desc}]"
+                            )
+                        else:
+                            # 刷新失败:降级为文本,不要直接把过期 URL 传给 LLM
+                            builder.add_text_left(
+                                f"[CQ:image,file={segment.file_name or 'unknown'},summary=图片已过期无法识别]"
+                            )
+                        remaining_pictures -= 1
                         cq_text = (
                             f"[CQ:image,file={segment.file_name or 'unknown'}]"
                         )
                         builder.add_text_left(cq_text)
                     else:
                         if not segment.text_description:
-                            url = segment.url or segment.file.file
-                            try:
-                                desc = await self.media_processor.image_to_text(url)
-                                segment.text_description = desc
-                            except Exception:
-                                segment.text_description = "<描述获取失败>"
+                            new_url = await refresh_image_download_url(
+                                segment.file_name,
+                                send_client,
+                                self.logger,
+                            )
+                            if new_url:
+                                try:
+                                    desc = await self.media_processor.image_to_text(new_url)
+                                except Exception:
+                                    desc = "<描述获取失败>"
+                            else:
+                                desc = "图片已过期无法识别"
+                            segment.text_description = desc
                         builder.add_text_left(f"[CQ:image,file={segment.file_name or 'unknown'},summary:{segment.text_description}]")
 
                 elif isinstance(segment, RecordSegment):
@@ -438,7 +464,10 @@ class ChatManager(ServiceBase):
                         if result is not None:
                             builder.add_video_base64_left(result.data, result.mime)
                         else:
-                            builder.add_video_left(video_url)
+                            # 下载失败:降级为文本,不要直接把过期 URL 传给 LLM
+                            builder.add_text_left(
+                                f"[CQ:video,file={segment.file_name or 'unknown'},summary=视频已过期无法识别]"
+                            )
                         remaining_videos -= 1
                         cq_text = (
                             f"[CQ:video,file={segment.file_name or 'unknown'}]"

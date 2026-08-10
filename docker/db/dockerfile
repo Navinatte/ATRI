@@ -1,6 +1,13 @@
 # db/Dockerfile
 FROM postgres:18
 
+# 1. 先切到 HTTP 协议装好 ca-certificates（HTTPS 源需要证书，鸡生蛋问题）
+RUN sed -i 's|https://|http://|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's|https://|http://|g' /etc/apt/sources.list
+# 2. 替换为阿里云源（官方源不稳定，避免 502）
+RUN sed -i 's|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g; s|http://security.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g; s|http://security.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list
+
 RUN apt-get update && apt-get install -y --fix-missing \
     curl \
     ca-certificates \
@@ -24,13 +31,7 @@ RUN apt-get update && apt-get install -y --fix-missing \
     gcc \
     postgresql-server-dev-18 \
     postgresql-18-pgdg-pgroonga \
-    && cd /tmp \
-    && git clone --branch v0.8.2 https://github.com/pgvector/pgvector.git \
-    && cd pgvector \
-    && make \
-    && make install \
-    && cd .. \
-    && rm -rf pgvector \
+    postgresql-18-pgvector \
     && apt-get remove -y git make gcc postgresql-server-dev-18 curl ca-certificates gnupg \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*

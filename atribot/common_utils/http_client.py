@@ -81,10 +81,16 @@ class HTTPClient:
                     raise ValueError(f"下载失败，状态码: {resp.status}")
                 if max_bytes is None:
                     return await resp.read()
-                data = await resp.content.read(max_bytes + 1)
-                if len(data) > max_bytes:
-                    raise ValueError(f"下载文件超过大小限制 ({max_bytes} bytes)")
-                return data
+
+                # StreamReader.read(n) 不保证读满 n 字节，需要循环读取直到 EOF
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in resp.content.iter_chunked(64 * 1024):
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise ValueError(f"下载文件超过大小限制 ({max_bytes} bytes)")
+                    chunks.append(chunk)
+                return b"".join(chunks)
         except (aiohttp.ClientError, asyncio.TimeoutError) as error:
             raise ValueError(f"请求失败: {error}") from error
         

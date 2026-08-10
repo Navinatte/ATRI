@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
+from atribot.core.platform.onebot.message_event import OneBotMessageEvent
 from atribot.core.service_container import container
 from atribot.core.time_trigger import TimeTriggerSupervisor
 from atribot.core.type.bot_types import atriMessageEvent
@@ -55,17 +56,23 @@ async def _trigger_self(
     inner_event = GroupMessageEvent(
         user_id=user_id,
         group_id=group_id,
-        self_id=0,
+        self_id=message_data.event.self_id,
         message_id=0,
         time=int(time.time()),
         segments=[],
         raw_message="",
-        sender={},
+        sender={"user_id": user_id, "nickname": "定时自触发", "role": "member"},
+    )
+    # 下游(reply_conduct 等)需要的是事件信封而非裸平台事件，信封才持有 send_client
+    envelope = OneBotMessageEvent(
+        event=inner_event,
+        send_client=message_data.send_client,
+        source=message_data.source,
     )
     group_chat = container.get_by_type(GroupChat)
     await group_chat.trigger_internal_thought(
         custom_prompt=note,
-        event=inner_event,
+        event=envelope,
         send_client=message_data.send_client,
     )
 

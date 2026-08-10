@@ -72,10 +72,10 @@ async def atri_encrypt_command(
 
         if is_decode:
             result = encryptor.decode(input_text, encoding=encoding)
-            title = "🔓 解码结果"
+            title = "解码结果"
         else:
             result = encryptor.encode(input_text, encoding=encoding)
-            title = "🔒 编码结果"
+            title = "编码结果"
 
         if len(result) > 3000:
             result = result[:3000] + "\n... (已截断)"

@@ -9,8 +9,8 @@ from typing import Coroutine, Dict, List
 from atribot.common_utils import (
     download_text,
     extract_json_from_text,
+    refresh_image_download_url,
     url_to_audio_mp3,
-    url_to_image_jpeg,
     url_to_video_mp4,
 )
 from atribot.core.atri_config import atriConfig
@@ -142,6 +142,33 @@ class ChatBasics(ABC):
         """保持沉默（通用）"""
         self.log.info(f"LLM决定静默理由:{response_json.get('reason')}")
 
+    async def _resolve_image_url(
+        self,
+        segment: ImageSegment,
+        send_client: SendClientBase | None,
+    ) -> str | None:
+        """解析可用于模型请求的图片 URL
+
+        QQ 图片 CDN 链接的 ``rkey`` 签名有时效性,过期后中转服务器无法下载。
+        优先通过 OneBot ``get_image`` API 以 file_id 刷新一张新鲜链接,
+        确保中转能直接 fetch;刷新失败返回 ``None``,由调用方降级为文本描述。
+
+        Args:
+            segment: 图片消息段(需含 url 与 file_name/file_id)
+            send_client: 发送客户端,用于刷新链接;为 None 时无法刷新
+
+        Returns:
+            新鲜可用的 http(s) 图片 URL;无法刷新返回 None
+        """
+        url = segment.url or (segment.file.file if segment.file else None)
+        if not url or not (url.startswith("http://") or url.startswith("https://")):
+            return None
+        return await refresh_image_download_url(
+            file_id=segment.file_name,
+            send_client=send_client,
+            log=self.log,
+        )
+
     async def append_message_segments_prompt(
         self,
         event: MessageEventEnvelope,
@@ -151,7 +178,8 @@ class ChatBasics(ABC):
         including_videos: bool = False,
     ) -> None:
         """为当前用户输入附加结构化的消息片段"""
-        Segment = event.event.segments[0]
+        segments = event.event.segments
+        Segment = segments[0] if segments else None
         message_builder.add_text(
             f"最新用户消息:\n<MESSAGE>"
             f"<user_id>{event.user_id}</user_id>"
@@ -164,17 +192,24 @@ class ChatBasics(ABC):
 
         if including_pictures:
             async def dispose_img(message: ImageSegment):
-                result = await url_to_image_jpeg(message.url, file_name=message.file_name)
-                if result is not None:
-                    message_builder.add_image_base64(result.data, result.mime)
+                new_url = await self._resolve_image_url(message, event.send_client)
+                if new_url:
+                    message_builder.add_image(new_url)
+                elif message.text_description or message.summary:
+                    desc = message.text_description or message.summary
+                    message_builder.add_text(f"[CQ:image,summary:{desc}]")
                 else:
-                    message_builder.add_text("[CQ:image,summary=图片出现问题]")
+                    message_builder.add_text("[CQ:image,summary=图片已过期无法识别]")
         else:
             async def dispose_img(message: ImageSegment):
                 if message.text_description:
                     desc = message.text_description
                 else:
-                    desc = await self.media_processor.image_to_text(message.url)
+                    new_url = await self._resolve_image_url(message, event.send_client)
+                    if new_url:
+                        desc = await self.media_processor.image_to_text(new_url)
+                    else:
+                        desc = "图片已过期无法识别"
                     message.text_description = desc
                     self.log.info(f"图像识别文本结果:{desc}")
                 message_builder.add_text(f"[CQ:image,summary:{desc}]")
@@ -212,7 +247,7 @@ class ChatBasics(ABC):
                 if result is not None:
                     message_builder.add_video_base64(result.data, result.mime)
                 else:
-                    message_builder.add_video(video_url)
+                    message_builder.add_text(f"[CQ:video,file={segment.file_name or 'unknown'},summary=视频已过期无法识别]")
         else:
             async def dispose_video(segment: VideoSegment) -> None:
                 video_url = segment.url or segment.file.file
@@ -482,6 +517,7 @@ class GroupChat(ChatBasics):
         self,
         custom_prompt: str,
         event: OneBotMessageEvent,
+        send_client: SendClientBase = None,
     ) -> None:
         """系统内部触发思考的入口
 
@@ -504,15 +540,18 @@ class GroupChat(ChatBasics):
             including_pictures=self.visual_sense,
             including_audios=self.audio_sense,
             including_videos=self.video_sense,
+            send_client=event.send_client,
         )
         message_builder.add_text_left(
             self.skills.prompt #skills的提示词
         )
 
-        prompt =(
-            f"{custom_prompt}\n触发定时消息用户:<user_id>{user_id}</user_id>"
-            f"<current_user_info>{await self.user_system.get_user_info(user_id)}</current_user_info>" if user_id else ""
-        )
+        prompt = custom_prompt
+        if user_id:
+            prompt += (
+                f"\n触发定时消息用户:<user_id>{user_id}</user_id>"
+                f"<current_user_info>{await self.user_system.get_user_info(user_id)}</current_user_info>"
+            )
         
         message_builder.add_text(
             self.build_prompt.decision_whether_responses(
@@ -640,6 +679,7 @@ class GroupChat(ChatBasics):
             including_pictures=including_pictures,
             including_audios=including_audios,
             including_videos=including_videos,
+            send_client=event.send_client,
         )
         message_builder.add_text_left(
             self.skills.prompt #skills的提示词
@@ -682,7 +722,7 @@ class GroupChat(ChatBasics):
             including_videos: 目标模型是否能够接收视频
         """
         
-        Segment = event.event.segments[0]
+        Segment = event.event.segments[0] if event.event.segments else None
 
         message_builder.add_text(
             f"最新用户消息:\n<MESSAGE>"
@@ -696,19 +736,26 @@ class GroupChat(ChatBasics):
         
         if including_pictures:
             async def dispose_img(message:ImageSegment):
-                """给自己解析图像"""
-                result = await url_to_image_jpeg(message.url, file_name=message.file_name)
-                if result is not None:
-                    message_builder.add_image_base64(result.data, result.mime)
+                """刷新图片下载链接后直传 URL 给模型"""
+                new_url = await self._resolve_image_url(message, event.send_client)
+                if new_url:
+                    message_builder.add_image(new_url)
+                elif message.text_description or message.summary:
+                    desc = message.text_description or message.summary
+                    message_builder.add_text(f"[CQ:image,summary:{desc}]")
                 else:
-                    message_builder.add_text("[CQ:image,summary=图片下载出现问题]")
+                    message_builder.add_text("[CQ:image,summary=图片已过期无法识别]")
         else:
             async def dispose_img(message:ImageSegment):
                 """交给其他模型识别图像转换文字"""
                 if message.text_description:
                     desc = message.text_description
                 else:
-                    desc = await self.media_processor.image_to_text(message.url)
+                    new_url = await self._resolve_image_url(message, event.send_client)
+                    if new_url:
+                        desc = await self.media_processor.image_to_text(new_url)
+                    else:
+                        desc = "图片已过期无法识别"
                     message.text_description = desc
                     self.log.info(f"输入图片描述:{desc}]")
                 message_builder.add_text(f"[CQ:image,summary:{desc}]")
@@ -742,13 +789,13 @@ class GroupChat(ChatBasics):
 
         if including_videos:
             async def dispose_video(segment: VideoSegment) -> None:
-                """将视频转为 mp4 base64,失败时直接传入视频 URL 供模型理解"""
+                """将视频转为 mp4 base64,下载失败时降级为文本描述"""
                 video_url = segment.url or segment.file.file
                 result = await url_to_video_mp4(video_url, segment.file_name)
                 if result is not None:
                     message_builder.add_video_base64(result.data, result.mime)
                 else:
-                    message_builder.add_video(video_url)
+                    message_builder.add_text(f"[CQ:video,file={segment.file_name or 'unknown'},summary=视频已过期无法识别]")
         else:
             async def dispose_video(segment: VideoSegment) -> None:
                 """交给其他模型将视频转为文字"""

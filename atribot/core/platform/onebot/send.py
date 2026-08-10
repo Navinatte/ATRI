@@ -20,6 +20,7 @@ class OneBotSendClient(SendClientBase):
         self,
         access_token: str = "ATRI",
         http_base_url: str = "http://localhost:8080",
+        file_http_url: str = "http://127.0.0.1:3000",
         connection_type: Literal["http", "WebSocket_client", "WebSocket_server"] = "http",
         ws_connection: OneBotWSClient | OneBotWSServer | None = None,
         log: logging.Logger | None = None,
@@ -27,6 +28,7 @@ class OneBotSendClient(SendClientBase):
     ):
         self.access_token = access_token
         self.http_base_url = http_base_url
+        self.file_http_url = file_http_url
         self.connection_type = connection_type
         self._ws = ws_connection
         self.log = log or logging.getLogger("OneBotSendClient")
@@ -41,6 +43,7 @@ class OneBotSendClient(SendClientBase):
             self.file_paths = file_paths
 
         self._http_session: Optional[aiohttp.ClientSession] = None
+        self._file_http_session: Optional[aiohttp.ClientSession] = None
         if connection_type == "http":
             headers = {
                 "Content-Type": "application/json",
@@ -175,6 +178,9 @@ class OneBotSendClient(SendClientBase):
         if self._http_session and not self._http_session.closed:
             await self._http_session.close()
             self.log.debug("HTTP session 已关闭")
+        if self._file_http_session and not self._file_http_session.closed:
+            await self._file_http_session.close()
+            self.log.debug("文件 HTTP session 已关闭")
 
     async def send_group(self, message: GroupMessage) -> dict | None:
         """专门发送群聊消息对象
@@ -472,6 +478,30 @@ class OneBotSendClient(SendClientBase):
             },
         )
 
+    async def _send_file_http(self, action: str, params: dict) -> Optional[dict]:
+        """通过 HTTP 发送文件类请求（绕过 WebSocket 体积限制）"""
+        if self._file_http_session is None:
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.access_token}",
+            }
+            self._file_http_session = aiohttp.ClientSession(headers=headers)
+            self.log.info("文件 HTTP 会话已创建 (target=%s)", self.file_http_url)
+        try:
+            async with self._file_http_session.post(
+                f"{self.file_http_url}/{action}", json=params
+            ) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    self.log.warning(
+                        "文件 HTTP 发送失败: %d %s", response.status, await response.text()
+                    )
+                    return None
+        except aiohttp.ClientError as e:
+            self.log.error("文件 HTTP 请求异常: %s", e)
+            return None
+
     async def send_group_audio(
         self,
         group_id: int,
@@ -479,16 +509,9 @@ class OneBotSendClient(SendClientBase):
         default: bool = False,
         local_Path_type: bool = True,
     ) -> Optional[dict]:
-        """发送群聊语音(增强版，支持默认路径和本地文件协议)
-
-        Args:
-            group_id: 群号
-            url_audio: 语音 URL 或文件名
-            default: 是否使用默认音频目录
-            local_Path_type: 是否按本地文件处理
-        """
+        """发送群聊语音(通过 HTTP，绕过 WebSocket 体积限制)"""
         file_url = await self._resolve_file_url(url_audio, default, local_Path_type, base_dir="audio")
-        return await self._send_impl(
+        return await self._send_file_http(
             "send_group_msg",
             {
                 "group_id": group_id,
@@ -504,22 +527,14 @@ class OneBotSendClient(SendClientBase):
         default: bool = False,
         local_Path_type: bool = True,
     ) -> Optional[dict]:
-        """发送群文件(增强版，支持默认路径和本地文件协议)
-
-        Args:
-            group_id: 群号
-            url_file: 文件 URL 或文件名
-            name: 自定义文件名
-            default: 是否使用默认文件目录
-            local_Path_type: 是否按本地文件处理
-        """
+        """发送群文件(通过 HTTP，绕过 WebSocket 体积限制)"""
         raw_path = url_file
         if default and self.file_paths:
             raw_path = str(self.file_paths.file / url_file)
         data: dict = {"file": f"file://{raw_path}" if local_Path_type else raw_path}
         if name:
             data["name"] = name
-        return await self._send_impl(
+        return await self._send_file_http(
             "send_group_msg",
             {
                 "group_id": group_id,

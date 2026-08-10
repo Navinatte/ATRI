@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -6,22 +6,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
-RUN apt-get update && apt-get install -y --fix-missing --no-install-recommends \
-    ffmpeg \
+# 仅安装运行时必需的系统库（opencv-headless 的轻量依赖）
+# 跳过 ffmpeg/tmux/curl/wget/fonts 等非核心包以规避 Docker bridge 不走 VPN 的问题
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    fonts-wqy-zenhei \
-    tmux \
-    curl \
-    wget \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
 
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir \
+# pip 使用清华源（容器网络不走 VPN，国内源更稳）
+RUN pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple --upgrade pip && \
+    pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
     numpy \
     pandas \
     matplotlib \

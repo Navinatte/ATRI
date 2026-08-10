@@ -76,6 +76,13 @@ class DockerSandbox(SandBoxBase):
                 print(f"Pulling image {self.image}...")
                 await asyncio.to_thread(self.client.images.pull, self.image)
 
+            # 构建卷挂载：将 Windows D 盘以只读方式挂入容器 /mnt/d
+            volumes = {
+                "D:/": {"bind": "/mnt/d", "mode": "ro"},
+            }
+            if extra_volumes := self.config.get("volumes"):
+                volumes.update(extra_volumes)
+
             # 启动容器
             self.container = await asyncio.to_thread(
                 self.client.containers.run,
@@ -90,6 +97,7 @@ class DockerSandbox(SandBoxBase):
                 cpu_quota=self.cpu_quota,
                 pids_limit=self.pids_limit,
                 network_mode=self.network_mode,
+                volumes=volumes,
                 labels=self.container_labels,
                 # cap_drop=['ALL'] # 丢弃所有 Linux 能力
             )

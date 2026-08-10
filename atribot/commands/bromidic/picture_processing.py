@@ -11,7 +11,7 @@ from atribot.core.service_container import container
 
 class pictureProcessing:
     
-    API_TOKEN = "sk_UqXz8BbTGFwO8YRfpfDdleZoBJxRopJp"
+    API_TOKEN = "sk_b0ochZiG7qLq7Zlftdc8eCrxGSCoYvTT"
     
     HEADERS = {
         "Authorization": f"Bearer {API_TOKEN}",

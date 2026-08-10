@@ -199,9 +199,12 @@ docker build -t atri-sandbox:latest -f atribot/LLMchat/sandbox/Dockerfile .
 
 
 ### 4. 启动项目
+```bash
+.venv\Scripts\python.exe main.py
+```
 项目依赖 **Python 3.14** 环境，推荐使用 `uv` 管理依赖。
 
-**使用 uv (推荐):**
+**使用 uv :**
 ```bash
 # 进入项目根目录
 uv sync

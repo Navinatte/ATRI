@@ -1,5 +1,8 @@
 import asyncio
+import datetime
+import os
 from logging import Logger
+from pathlib import Path
 from typing import Any, Awaitable
 
 import uvicorn
@@ -145,6 +148,9 @@ class BotFramework:
         await self._start_sandbox()
         await self._resolve_services()
 
+        # 异步备份数据库（后台运行，不阻塞启动）
+        self.create_background_task(self._backup_database(), name="startup-db-backup")
+
         # 注册 @ 路由监听器
         self._register_at_routes()
 
@@ -177,7 +183,7 @@ class BotFramework:
         @bus.on_message(priority=100)
         async def on_chat(event:atriMessageEvent):
             try:
-                if group_context := event._extra["group_context"]:
+                if group_context := event._extra.get("group_context"):
                     event.stop_propagation = await _initiative_chat.decision(event, group_context)
             except Exception as e:
                 log.exception("聊天处理失败: %s", e)
@@ -257,6 +263,116 @@ class BotFramework:
 
         if exc := task.exception():
             self.log.exception("后台任务异常退出: %s", task.get_name(), exc_info=exc)
+
+    async def _backup_database(self) -> None:
+        """异步备份 atri 数据库到 D:\\资源\\ATRI\\
+
+        使用 pg_dump 自定义压缩格式，文件名格式：ATRI-backup-YYYY-MM-DD-HH-MM-SS.dump
+        作为后台任务运行，不会阻塞 bot 启动流程。
+        """
+        try:
+            backup_dir = Path("D:/资源/ATRI")
+            backup_dir.mkdir(parents=True, exist_ok=True)
+
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+            filepath = backup_dir / f"ATRI-backup-{timestamp}.dump"
+
+            db_cfg = self.config.database
+            db_name = getattr(db_cfg, "database", "atri")
+
+            # 优先使用 Docker 容器内的 pg_dump（版本与数据库一致，避免版本不匹配）
+            # 检测目标是否为本机 Docker 数据库：host 为 localhost/127.0.0.1 且端口 5432 时尝试容器内执行
+            container_name = "atri-db"
+            env = os.environ.copy()
+            env["PGPASSWORD"] = db_cfg.password
+
+            use_docker_exec = False
+            try:
+                # 检查容器是否存在且在运行
+                check = await asyncio.create_subprocess_exec(
+                    "docker", "ps", "--format", "{{.Names}}",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                check_out, _ = await check.communicate()
+                running = check_out.decode("utf-8", errors="replace").splitlines()
+                use_docker_exec = container_name in running
+            except Exception:
+                use_docker_exec = False
+
+            if use_docker_exec:
+                # 在容器内执行 pg_dump（无需本机安装 PostgreSQL 工具）
+                process = await asyncio.create_subprocess_exec(
+                    "docker", "exec", container_name, "pg_dump",
+                    "-h", "127.0.0.1",
+                    "-p", "5432",
+                    "-U", str(db_cfg.user),
+                    "-d", db_name,
+                    "-F", "c",
+                    "-f", "/tmp/atri_backup.dump",
+                    env=env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await process.communicate()
+
+                if process.returncode == 0:
+                    # 从容器复制回 Windows 备份目录
+                    cp = await asyncio.create_subprocess_exec(
+                        "docker", "cp", f"{container_name}:/tmp/atri_backup.dump", str(filepath),
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    await cp.communicate()
+                    if not filepath.exists():
+                        self.log.error("数据库备份失败: docker cp 未生成备份文件")
+                        return
+                else:
+                    err_msg = stderr.decode("utf-8", errors="replace").strip() or "未知错误"
+                    self.log.error(f"数据库备份失败: {err_msg}")
+                    return
+            else:
+                # 回退方案：本机 pg_dump（硬编码路径，若版本不匹配会报错并提示）
+                pg_dump = Path(r"C:\Program Files\PostgreSQL\17\bin\pg_dump.exe")
+                if not pg_dump.exists():
+                    self.log.error("数据库备份失败: 未找到 pg_dump 工具")
+                    return
+
+                process = await asyncio.create_subprocess_exec(
+                    str(pg_dump),
+                    "-h", str(db_cfg.host),
+                    "-p", str(db_cfg.port),
+                    "-U", str(db_cfg.user),
+                    "-d", db_name,
+                    "-F", "c",
+                    "-f", str(filepath),
+                    env=env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+
+                stdout, stderr = await process.communicate()
+
+                if process.returncode != 0:
+                    err_msg = stderr.decode("utf-8", errors="replace").strip() or "未知错误"
+                    self.log.error(f"数据库备份失败: {err_msg}")
+                    return
+
+            if filepath.exists():
+                size_kb = filepath.stat().st_size / 1024
+                self.log.info(f"数据库备份完成: {filepath.name} ({size_kb:.1f} KB)")
+
+                # 只保留最新 15 个备份，删除其余旧文件
+                backups = sorted(
+                    backup_dir.glob("ATRI-backup-*.dump"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                for old in backups[15:]:
+                    old.unlink(missing_ok=True)
+                    self.log.debug(f"已清理旧备份: {old.name}")
+        except Exception:
+            self.log.exception("数据库备份异常")
 
     async def graceful_shutdown(self) -> None:
         """等待关闭流程执行完成"""

@@ -1,6 +1,7 @@
 from logging import Logger
 from typing import Optional
 
+from atribot.common_utils.file.image_utils import url_to_image_jpeg
 from atribot.core.service_container import container
 from atribot.LLMchat.model_api.universal_async_llm_api import universal_ai_api
 
@@ -62,7 +63,7 @@ class MediaProcessor:
         """将图片 URL 转换为文字描述。
 
         Args:
-            image_url: 图片地址(http/https 或 base64://)
+            image_url: 图片地址(http/https 或 base64:// 或 data: URI)
 
         Returns:
             模型生成的图片内容描述
@@ -70,12 +71,22 @@ class MediaProcessor:
         if not self._image_api:
             return "图像识别失败"
         try:
+            # QQ CDN URL 有 rkey 签名时效，且模型服务器在国外无法直连
+            # 先下载图片转为 base64 data URI 再传给视觉模型
+            if image_url.startswith("data:"):
+                img_src = image_url  # 已经是 base64
+            else:
+                result = await url_to_image_jpeg(image_url)
+                if result is not None:
+                    img_src = f"data:{result.mime};base64,{result.data}"
+                else:
+                    return "图片下载失败"
             result = await self._image_api.generate_text_lightweight(
                 model=self._image_model,
                 messages=[{
                     "role": "user",
                     "content": [
-                        {"type": "image_url", "image_url": {"url": image_url}},
+                        {"type": "image_url", "image_url": {"url": img_src}},
                         {"type": "text", "text": "请详细描述你看到的东西，上面是什么、有什么、在什么地方，如果上面有文字也要详细说清楚，如果有什么自己的理解可以说出来，如果上面是什么你认识的可以介绍一下"}
                     ]
                 }]

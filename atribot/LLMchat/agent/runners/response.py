@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from abc import ABC
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -53,10 +55,6 @@ class AgentStreamChunk(AgentEvent, ABC):
 
     所有流式事件在 stream=True 时产出
     """
-
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
-        # 确保子类不意外继承 event_type 默认值
 
 
 @dataclass(slots=True)

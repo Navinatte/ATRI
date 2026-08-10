@@ -1,9 +1,14 @@
 import asyncio
 import base64
 import io
+from logging import Logger
+from typing import Any
 
 import aiohttp
-from PIL import Image
+from PIL import Image, ImageFile
+
+# 允许 PIL 加载被截断的图片（QQ 表情/贴图等常有截断情况）
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 from atribot.common_utils.file.file_utils import resolve_file_to_bytes
 from atribot.common_utils.file.media_cache import (
@@ -40,14 +45,19 @@ def compress_image(image_bytes: bytes, max_size_kb: int) -> bytes:
     """
     max_size_bytes = max_size_kb * 1024
 
-    if len(image_bytes) <= max_size_bytes:
-        return image_bytes
-
     try:
         image = Image.open(io.BytesIO(image_bytes))
 
         if image.mode != "RGB":
             image = image.convert("RGB")
+
+        # 先直接保存为最高画质 JPEG，避免 GIF 等格式的 MIME 不匹配
+        out = io.BytesIO()
+        image.save(out, format="JPEG", quality=95)
+        jpeg_bytes = out.getvalue()
+
+        if len(jpeg_bytes) <= max_size_bytes:
+            return jpeg_bytes
 
         quality = 90
         scale = 1.0
@@ -250,3 +260,51 @@ async def url_to_image_jpeg(
         )
         await cache_put(key, data, result.fmt, result.mime, result.converted)
         return result
+
+
+async def refresh_image_download_url(
+    file_id: str | None,
+    send_client: Any | None,
+    log: Logger | None = None,
+) -> str | None:
+    """通过 OneBot ``get_image`` API 刷新 QQ 图片的下载链接
+
+    QQ 图片 CDN 链接（``multimedia.nt.qq.com.cn``）携带的 ``rkey`` 签名
+    有时效性，过期后中转服务器（如 litellm）无法下载该 URL，导致请求 400。
+    本函数使用 CQ 码中的 ``file`` 字段（图片的 file_id）调用 OneBot
+    ``get_image`` API，换取一张新鲜的下载链接。
+
+    只做「刷新链接」操作，**不下载、不转 base64**，避免把大量图片字节
+    塞进 LLM 上下文导致上下文超限。刷新失败返回 ``None``，由调用方降级为
+    文本描述（如 ``[图片已过期无法识别]``），保证不会把过期 URL 传给 LLM。
+
+    Args:
+        file_id: QQ 图片的 file 字段(CQ 码中的 file),用于换取新链接
+        send_client: 发送客户端(需有 get_img_details 方法)
+        log: 可选日志器
+
+    Returns:
+        新的 http(s) 下载 URL;刷新失败或无法刷新返回 None
+    """
+    if not file_id or send_client is None or not hasattr(send_client, "get_img_details"):
+        return None
+
+    try:
+        resp = await send_client.get_img_details(file_id)
+        new_url: str | None = None
+        if isinstance(resp, dict):
+            data = resp.get("data")
+            if isinstance(data, dict):
+                new_url = data.get("url")
+            if not new_url:
+                new_url = resp.get("url")
+        # 只接受 http(s) URL:有些实现 data.file 返回本地缓存路径,不能给中转 fetch
+        if new_url and new_url.startswith(("http://", "https://")):
+            return new_url
+        if log:
+            log.warning(f"刷新图片下载链接失败: file_id={file_id}, resp={resp}")
+        return None
+    except Exception as error:
+        if log:
+            log.warning(f"刷新图片下载链接异常: file_id={file_id}, error={error}")
+        return None

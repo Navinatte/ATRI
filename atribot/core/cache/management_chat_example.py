@@ -147,7 +147,11 @@ class ChatManager(ServiceBase):
                 ))
 
         self._listener_fn = self._store_message_context
-        pm.event_bus.on(PostType.MESSAGE, rule=_StoreRule())(self._store_message_context)
+        pm.event_bus.on(
+            PostType.MESSAGE, 
+            rule=_StoreRule(),
+            priority = 60
+        )(self._store_message_context)
 
     async def cleanup(self) -> None:
         """清理：注销上下文处理器"""
@@ -448,14 +452,11 @@ class ChatManager(ServiceBase):
                                 f"[CQ:record,file={segment.file_name or 'unknown'},summary:{segment.text_description}]"
                             )
                     else:
-                        if not segment.text_description:
-                            audio_url = segment.url or segment.file.file
-                            try:
-                                desc = await self.media_processor.audio_to_text(audio_url)
-                                segment.text_description = desc
-                            except Exception:
-                                segment.text_description = "<描述获取失败>"
-                        builder.add_text_left(f"[CQ:record,file={segment.file_name or 'unknown'},summary:{segment.text_description}]")
+                        # 超配额音频降级为 CQ 文本标记，不调用 MediaProcessor
+                        if segment.text_description:
+                            builder.add_text_left(f"[CQ:record,file={segment.file_name or 'unknown'},summary:{segment.text_description}]")
+                        else:
+                            builder.add_text_left(f"[CQ:record,file={segment.file_name or 'unknown'}]" )
 
                 elif isinstance(segment, VideoSegment):
                     if remaining_videos > 0:
@@ -474,14 +475,11 @@ class ChatManager(ServiceBase):
                         )
                         builder.add_text_left(cq_text)
                     else:
-                        if not segment.text_description:
-                            video_url = segment.url or segment.file.file
-                            try:
-                                desc = await self.media_processor.video_to_text(video_url)
-                                segment.text_description = desc
-                            except Exception:
-                                segment.text_description = "<描述获取失败>"
-                        builder.add_text_left(f"[CQ:video,file={segment.file_name or 'unknown'},summary:{segment.text_description}]")
+                        # 超配额视频降级为 CQ 文本标记，不调用 MediaProcessor
+                        if segment.text_description:
+                            builder.add_text_left(f"[CQ:video,file={segment.file_name or 'unknown'},summary:{segment.text_description}]")
+                        else:
+                            builder.add_text_left(f"[CQ:video,file={segment.file_name or 'unknown'}]" )
 
                 else:
                     builder.add_text_left(segment.__str__())

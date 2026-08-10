@@ -60,8 +60,10 @@ class MediaProcessor:
             self._video_model = None
 
     async def image_to_text(self, image_url: str) -> str:
-        """将图片 URL 转换为文字描述。
+        """将图片转换为文字描述。
 
+        先本地下载并统一转码为 JPEG base64 再交由识别模型处理
+        
         Args:
             image_url: 图片地址(http/https 或 base64:// 或 data: URI)
 
@@ -70,6 +72,8 @@ class MediaProcessor:
         """
         if not self._image_api:
             return "图像识别失败"
+        if not image_url:
+            return "图片识别出现错误: 图片地址为空"
         try:
             # QQ CDN URL 有 rkey 签名时效，且模型服务器在国外无法直连
             # 先下载图片转为 base64 data URI 再传给视觉模型
@@ -91,9 +95,9 @@ class MediaProcessor:
                     ]
                 }]
             )
-            return result["choices"][0]["message"]["content"]
+            return response["choices"][0]["message"]["content"]
         except Exception as e:
-            return f"图片识别出现错误: {result if 'result' in locals() else e}"
+            return f"图片识别出现错误: {response if 'response' in locals() else e}"
 
     async def audio_to_text(self, audio_url: str) -> str:
         """将音频转换为文字

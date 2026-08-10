@@ -38,6 +38,7 @@ __all__ = [
     "ClusterUtils",
     "calculate_similarity",
     "compress_image",
+    "convert_to_jpeg",
     "construction_message_dict",
     "download_binary",
     "download_text",

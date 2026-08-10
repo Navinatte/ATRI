@@ -36,3 +36,6 @@ document/temp/
 # Virtual environments
 .venv
 .wslvenv
+
+# 本地环境配置
+.env

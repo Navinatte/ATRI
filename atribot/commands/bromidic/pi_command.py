@@ -42,6 +42,6 @@ async def picture_processing_command(message_data: MessageEventEnvelope, prompt:
 
     add_img(message_data.event)
 
-    img_base64 = await image_processing.step(image_url_list, prompt, model="gptimage")
+    img_base64 = await image_processing.step(image_url_list, prompt, model="gpt-image-2")
 
     await message_data.send_client.send_group_pictures(message_data.group_id, f"base64://{img_base64}", local_Path_type=False)

@@ -22,7 +22,7 @@ class pictureProcessing:
     def __init__(self):
         self.step_lock = asyncio.Lock()
         
-    async def step(self, image_url_list: List[str], prompt: str, model:str = "nanobanana") -> str:
+    async def step(self, image_url_list: List[str], prompt: str, model:str = "gpt-image-2") -> str:
         """图片处理主函数"""
         if self.step_lock.locked():
             raise RuntimeError("系统繁忙，请稍后再试")
@@ -63,7 +63,7 @@ class pictureProcessing:
         width: int = 1024,
         height: int = 1024,
         seed: Optional[int] = None,
-        model: str = "gptimage",
+        model: str = "gpt-image-2",
         image_url: Union[str, List[str], None] = None,
         nologo: bool = True,
         private: bool = False,

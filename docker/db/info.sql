@@ -96,6 +96,7 @@ CREATE TABLE chat_context (
     group_id BIGINT,
     context_data JSONB NOT NULL DEFAULT '[]',
     total_tokens INT DEFAULT 0,
+    play_role VARCHAR(64),
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT chk_owner_exclusive CHECK (
         (user_id IS NOT NULL AND group_id IS NULL) OR
@@ -180,6 +181,7 @@ COMMENT ON TABLE user_info IS '用户画像表';
 COMMENT ON TABLE permissions IS '权限控制表';
 COMMENT ON TABLE message IS '接收过的聊天记录消息表';
 COMMENT ON TABLE chat_context IS '聊天的上下文缓存表';
+COMMENT ON COLUMN chat_context.play_role IS '当前使用的角色设定名（对应 character_setting 下的文件名），NULL 表示默认角色';
 COMMENT ON TABLE atri_memory IS '记忆表：存储用户记忆、群聊话题及知识库条目，支持向量检索与全文检索';
 
 COMMENT ON COLUMN atri_memory.user_id IS 'NULL=知识库条目；有值=用户相关记忆';

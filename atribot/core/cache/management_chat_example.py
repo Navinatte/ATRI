@@ -248,24 +248,24 @@ class ChatManager(ServiceBase):
             return private_example
         else:
             
-            messages = await self.lifecycle_manager.get_user_context(
+            stored_data = await self.lifecycle_manager.get_user_context(
                 user_id
             )
+            
+            messages, restored_role = stored_data if stored_data else ([], None)
+            restored_role = self._validate_play_role(restored_role)
             
             chat_context = Context(
                 messages = messages if messages else [],
                 user_max_record = self.private_max_record,
-                play_role = self.play_role_list.get(
-                    self.default_play_role, 
-                    self.play_role_list["none"]
-                )
+                play_role = self.play_role_list.get(restored_role, self.play_role_list["none"])
             )
             
             private_example = self.private_dict[user_id] = \
             PrivateContext(
                 user_id = user_id,
                 chat_context = chat_context,
-                play_roles = self.default_play_role,
+                play_roles = restored_role,
                 max_record = self.private_max_record,
             )
             return private_example
@@ -285,23 +285,23 @@ class ChatManager(ServiceBase):
             pass
         else:
             
-            messages = await self.lifecycle_manager.get_group_context(
+            stored_data = await self.lifecycle_manager.get_group_context(
                 group_id
             )
-                        
+            
+            messages, restored_role = stored_data if stored_data else ([], None)
+            restored_role = self._validate_play_role(restored_role)
+            
             chat_context = Context(
                 messages = messages if messages else [],
                 user_max_record = self.LLM_max_record,
-                play_role = self.play_role_list.get(
-                    self.default_play_role, 
-                    self.play_role_list["none"]
-                )
+                play_role = self.play_role_list.get(restored_role, self.play_role_list["none"])
             )
             
             group_example = self.group_dict[group_id] = \
             GroupContext(
                 group_id=group_id,
-                play_roles=self.default_play_role,
+                play_roles=restored_role,
                 chat_context=chat_context,
                 group_max_record=self.group_max_record,
                 initiative_chat = group_id in self.initiative_white_list,
@@ -309,6 +309,23 @@ class ChatManager(ServiceBase):
             )
         #因为这个群聊接收消息时会刷新时间，需要获取的时候更新时间了
         return group_example
+    
+    def _validate_play_role(self, role_key: str | None) -> str:
+        """校验从数据库恢复的角色键名是否仍可用
+        
+        角色被删除/改名时回退为默认角色，并留下日志便于追踪
+        
+        Args:
+            role_key (str | None): 数据库中存储的角色键名
+        
+        Returns:
+            str: 校验后的角色键名（必定存在于 play_role_list 中）
+        """
+        if role_key and role_key in self.play_role_list:
+            return role_key
+        if role_key:
+            self.logger.warning(f"恢复上下文时发现角色 '{role_key}' 已不存在，回退为默认角色 '{self.default_play_role}'")
+        return self.default_play_role
         
         
     async def store_group_chat(self, group_id: str, context: Context) -> None:
@@ -659,7 +676,7 @@ class ChatManager(ServiceBase):
                 
                 try:
                     file_size = os.path.getsize(file_path)
-                    if file_size > 40 * 1024:
+                    if file_size > 55 * 1024:
                         self.logger.warning(f"文件过大({file_size/1024:.1f}KB)，跳过: {character_setting}")
                         continue
                     

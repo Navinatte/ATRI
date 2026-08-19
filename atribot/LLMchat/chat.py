@@ -290,7 +290,18 @@ class ChatBasics(ABC):
                     if isinstance(segment, FileSegment):
                         if segment.file_name and (file_extension := segment.file_name.split('.')[-1].lower()):
                             if file_extension in IMAGE_EXTENSIONS:
-                                await dispose_img(segment)
+                                # 图片文件伪装成图片段,复用 dispose_img 处理链路
+                                try:
+                                    await dispose_img(ImageSegment(
+                                        file=segment.file,
+                                        file_name=segment.file_name,
+                                        url=segment.url,
+                                        path=segment.path,
+                                        file_size=segment.file_size,
+                                    ))
+                                except Exception as e:
+                                    self.log.warning(f"图片文件处理失败: {e}")
+                                    message_builder.add_text(segment.__str__())
                                 continue
                             elif file_extension in AUDIO_EXTENSIONS:
                                 # 音频文件伪装成语音段,复用 dispose_audio 处理链路
@@ -865,7 +876,18 @@ class GroupChat(ChatBasics):
                     if isinstance(segment, FileSegment):
                         if segment.file_name and (file_extension := segment.file_name.split('.')[-1].lower()):
                             if file_extension in IMAGE_EXTENSIONS:
-                                await dispose_img(segment)
+                                # 图片文件伪装成图片段,复用 dispose_img 处理链路
+                                try:
+                                    await dispose_img(ImageSegment(
+                                        file=segment.file,
+                                        file_name=segment.file_name,
+                                        url=segment.url,
+                                        path=segment.path,
+                                        file_size=segment.file_size,
+                                    ))
+                                except Exception as e:
+                                    self.log.warning(f"图片文件处理失败: {e}")
+                                    message_builder.add_text(segment.__str__())
                                 continue
                             elif file_extension in AUDIO_EXTENSIONS:
                                 # 音频文件伪装成语音段,复用 dispose_audio 处理链路
@@ -878,7 +900,7 @@ class GroupChat(ChatBasics):
                                         file_size=segment.file_size,
                                     ))
                                 except Exception as e:
-                                    self.log.warning(f"音频文件处理失败,降级为文件名提示: {e}")
+                                    self.log.warning(f"音频文件处理失败: {e}")
                                     message_builder.add_text(segment.__str__())
                                 continue
                             elif file_extension in TEXT_EXTENSIONS:

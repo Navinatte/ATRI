@@ -5,6 +5,7 @@ from logging import Logger
 from typing import TYPE_CHECKING, Any, Dict, List
 
 from atribot.common_utils import (
+    AUDIO_EXTENSIONS,
     refresh_image_download_url,
     url_to_audio_mp3,
     url_to_video_mp4,
@@ -17,6 +18,7 @@ from atribot.core.platform.manager import PlatformManager
 from atribot.core.service_container import ServiceBase, container
 from atribot.core.time_trigger import TimeTriggerSupervisor
 from atribot.core.type.chat_message_types import (
+    FileSegment,
     ImageSegment,
     RecordSegment,
     TextSegment,
@@ -499,7 +501,51 @@ class ChatManager(ServiceBase):
                             builder.add_text_left(f"[CQ:video,file={segment.file_name or 'unknown'}]" )
 
                 else:
-                    builder.add_text_left(segment.__str__())
+                    # 文件类消息:音频文件按语音处理(复用 RecordSegment 链路),其余保持文本提示
+                    if isinstance(segment, FileSegment):
+                        file_name = segment.file_name or ""
+                        file_extension = file_name.split('.')[-1].lower() if '.' in file_name else ''
+                        if file_extension in AUDIO_EXTENSIONS:
+                            audio_segment = RecordSegment(
+                                file=segment.file,
+                                file_name=segment.file_name,
+                                url=segment.url,
+                                path=segment.path,
+                                file_size=segment.file_size,
+                            )
+                            if remaining_audios > 0:
+                                audio_url = audio_segment.url or audio_segment.file.file
+                                try:
+                                    result = await url_to_audio_mp3(audio_url, audio_segment.file_name)
+                                except Exception as e:
+                                    self.logger.warning(f"音频文件下载失败: {e}")
+                                    result = None
+                                if result is not None:
+                                    builder.add_audio_left(result.data, result.fmt)
+                                    remaining_audios -= 1
+                                    builder.add_text_left(
+                                        f"[CQ:file,file={segment.file_name or 'unknown'}]"
+                                    )
+                                else:
+                                    if not audio_segment.text_description:
+                                        try:
+                                            audio_segment.text_description = await self.media_processor.audio_to_text(
+                                                audio_segment.url or audio_segment.file.file
+                                            )
+                                        except Exception:
+                                            audio_segment.text_description = "<描述获取失败>"
+                                    builder.add_text_left(
+                                        f"[CQ:file,file={segment.file_name or 'unknown'},summary:{audio_segment.text_description}]"
+                                    )
+                            else:
+                                # 超配额音频降级为 CQ 文本标记,不调用 MediaProcessor
+                                builder.add_text_left(
+                                    f"[CQ:file,file={segment.file_name or 'unknown'},summary:音频文件(未嵌入)]"
+                                )
+                        else:
+                            builder.add_text_left(segment.__str__())
+                    else:
+                        builder.add_text_left(segment.__str__())
 
             builder.add_text_left(
                 f'<MESSAGE user_id={event.user_id}'

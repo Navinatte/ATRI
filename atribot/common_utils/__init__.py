@@ -9,6 +9,7 @@ from .file.image_utils import (
     urls_list_to_base64,
 )
 from .file.media_utils import (
+    AUDIO_EXTENSIONS,
     MediaConvertResult,
     url_to_audio_base64,
     url_to_audio_mp3,
@@ -35,6 +36,7 @@ from .timer import poll_until_done, timer
 from .validation import is_qq
 
 __all__ = [
+    "AUDIO_EXTENSIONS",
     "ClusterUtils",
     "calculate_similarity",
     "compress_image",

@@ -7,6 +7,7 @@ from logging import Logger
 from typing import Coroutine, Dict, List
 
 from atribot.common_utils import (
+    AUDIO_EXTENSIONS,
     download_text,
     extract_json_from_text,
     refresh_image_download_url,
@@ -60,10 +61,6 @@ TEXT_EXTENSIONS = {
 }
 IMAGE_EXTENSIONS = {
     'jpg', 'jpeg', 'png', 'gif', 'psd',
-}
-AUDIO_EXTENSIONS = {
-    # 与 media_utils._AUDIO_FORMAT_MAP 的键保持一致
-    'mp3', 'ogg', 'wav', 'flac', 'aac', 'm4a', 'silk', 'amr', 'opus',
 }
 
 

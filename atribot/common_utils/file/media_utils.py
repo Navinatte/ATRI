@@ -35,6 +35,9 @@ _AUDIO_FORMAT_MAP: dict[str, str] = {
     "opus": "ogg",
 }
 
+# 音频文件扩展名集合(与 _AUDIO_FORMAT_MAP 键一致),用于识别文件形式的音频
+AUDIO_EXTENSIONS: frozenset[str] = frozenset(_AUDIO_FORMAT_MAP.keys())
+
 
 def _detect_audio_format(url: str, file_name: str | None = None) -> str:
     """从 URL 或文件名推断音频格式，无法识别时默认返回 'mp3'"""

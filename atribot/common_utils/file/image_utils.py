@@ -55,6 +55,10 @@ def convert_to_jpeg(
             image.seek(0)
             image.load()
 
+        # 带透明通道的图片(RGBA/LA/P)必须先合成白底转 RGB,
+        # 否则 save("JPEG") 会抛 "cannot write mode RGBA as JPEG"
+        image = _flatten_to_rgb(image)
+
         # 先直接保存为最高画质 JPEG，避免 GIF 等格式的 MIME 不匹配
         out = io.BytesIO()
         image.save(out, format="JPEG", quality=95)

@@ -8,6 +8,7 @@ from atribot.common_utils import (
     AUDIO_EXTENSIONS,
     refresh_image_download_url,
     url_to_audio_mp3,
+    url_to_image_jpeg,
     url_to_video_mp4,
 )
 from atribot.core.atri_config import atriConfig
@@ -415,8 +416,12 @@ class ChatManager(ServiceBase):
                             send_client,
                             self.logger,
                         )
-                        if new_url:
-                            builder.add_image_left(new_url)
+                        image_data = (
+                            await url_to_image_jpeg(new_url, file_name=segment.file_name)
+                            if new_url else None
+                        )
+                        if image_data:
+                            builder.add_image_base64_left(image_data.data, image_data.mime)
                         elif segment.text_description or segment.summary:
                             desc = segment.text_description or segment.summary
                             builder.add_text_left(

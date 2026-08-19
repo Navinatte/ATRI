@@ -4,7 +4,7 @@ import uuid
 from abc import ABC, abstractmethod
 from dataclasses import replace
 from logging import Logger
-from typing import Coroutine, Dict, List
+from typing import Any, Callable, Coroutine, Dict, Iterable, List
 
 from atribot.common_utils import (
     AUDIO_EXTENSIONS,
@@ -12,6 +12,7 @@ from atribot.common_utils import (
     extract_json_from_text,
     refresh_image_download_url,
     url_to_audio_mp3,
+    url_to_image_jpeg,
     url_to_video_mp4,
 )
 from atribot.core.atri_config import atriConfig
@@ -68,6 +69,7 @@ MESSAGE_DELAY = 1.5  # 多条消息间隔时间
 MAX_SINGLE_MESSAGE_LENGTH = 4  # 分条发送长度阈值
 LLM_COOLDOWN_THRESHOLD = 5 #间隔时间,防止多条消息同时发送
 STRING_LENGTH_LIMIT = 500 #字符串长度限制
+MAX_INVALID_DECISION_RETRIES = 2 #模型输出无效decision时,追加报错重试的最大次数
 
 class ChatBasics(ABC):
     """聊天基类"""
@@ -114,6 +116,107 @@ class ChatBasics(ABC):
         return (
             template_toolset.copy() if template_toolset is not None else None
         )
+
+    def _extract_valid_actions(
+        self,
+        response: GenerationResponse,
+        valid_decisions: Iterable[str],
+    ) -> tuple[List[Dict], List[str]]:
+        """解析模型回复中的actions,分离出合法项与错误描述
+
+        Args:
+            response: 模型响应
+            valid_decisions: 合法的decision集合
+
+        Returns:
+            (合法action列表, 错误描述列表)
+        """
+        valid_set = set(valid_decisions)
+        actions: List[Dict] = []
+        errors: List[str] = []
+
+        for response_json in (
+            extract_json_from_text(s) for s in response.reply_text if s != ""
+        ):
+            if not isinstance(response_json, dict):
+                if response_json:
+                    errors.append(f"返回json解析不正确:{type(response_json)}")
+                continue
+
+            inner_actions = response_json.get("actions")
+            if inner_actions is None:
+                inner_actions = [response_json]
+
+            for action in inner_actions:
+                if not isinstance(action, dict):
+                    errors.append(f"返回json解析不正确:{type(action)}")
+                    continue
+                decision = action.get("decision")
+                if not decision:
+                    errors.append(f"返回json缺少decision字段:{action}")
+                elif decision not in valid_set:
+                    errors.append(
+                        f"无效decision:{action}"
+                        f"(decision只能是{','.join(sorted(valid_set))}其中之一)"
+                    )
+                else:
+                    actions.append(action)
+
+        return actions, errors
+
+    async def _validate_decision_with_retry(
+        self,
+        response: GenerationResponse,
+        request: GenerationRequestSimplify,
+        message_builder: MessageBuilder,
+        resend: Callable[[GenerationRequestSimplify], Coroutine[Any, Any, GenerationResponse]],
+        uid: str,
+        valid_decisions: Iterable[str],
+    ) -> tuple[GenerationResponse, List[Dict]]:
+        """校验模型返回的decision,输出无效时把报错追加到提示词尾部重试请求
+
+        Args:
+            response: 首次请求的模型响应
+            request: 首次请求使用的请求体
+            message_builder: 本次增量消息的构建器,重试的报错提示会追加到其尾部
+            resend: 使用更新后请求体重新请求模型的回调
+            uid: 唯一响应标识
+            valid_decisions: 合法的decision集合
+
+        Returns:
+            (最终使用的模型响应, 待执行的合法action列表)
+        """
+        valid_set = set(valid_decisions)
+        actions, errors = self._extract_valid_actions(response, valid_set)
+
+        for attempt in range(1, MAX_INVALID_DECISION_RETRIES + 1):
+            if not errors:
+                return response, actions
+
+            self.log.warning(
+                f"[{uid}]模型输出存在无效decision,第{attempt}次追加报错重试:"
+                f"\n{'\n'.join(errors)}"
+                f"\n原始回复:\n{''.join(response.reply_text)}"
+            )
+            message_builder.add_text(
+                "\n<retry_feedback>"
+                "你上一次的输出存在以下错误:\n"
+                f"{'\n'.join(errors)}\n"
+                "这是不允许的。decision只能从以下值中选择:"
+                f"{','.join(sorted(valid_set))}\n"
+                "请重新检查要求,重新输出包含正确actions的合法JSON"
+                "</retry_feedback>"
+            )
+            response = await resend(
+                replace(request, increment_messages=[message_builder.build()])
+            )
+            actions, errors = self._extract_valid_actions(response, valid_set)
+
+        if errors:
+            for error in errors:
+                self.log.error(f"[{uid}]重试后模型仍输出无效内容:{error}")
+
+        return response, actions
 
     @abstractmethod
     async def step(self) -> None:
@@ -209,8 +312,12 @@ class ChatBasics(ABC):
         if including_pictures:
             async def dispose_img(message: ImageSegment):
                 new_url = await self._resolve_image_url(message, event.send_client)
-                if new_url:
-                    message_builder.add_image(new_url)
+                image_data = (
+                    await url_to_image_jpeg(new_url, file_name=message.file_name)
+                    if new_url else None
+                )
+                if image_data:
+                    message_builder.add_image_base64(image_data.data, image_data.mime)
                 elif message.text_description or message.summary:
                     desc = message.text_description or message.summary
                     message_builder.add_text(f"[CQ:image,summary:{desc}]")
@@ -481,41 +588,21 @@ class GroupChat(ChatBasics):
             uid = uid
         )
 
+        response, actions = await self._validate_decision_with_retry(
+            response=response,
+            request=request,
+            message_builder=message_builder,
+            resend=lambda req: self._request_model_with_fallback_(
+                request=req, event=event, prompt=prompt, uid=uid
+            ),
+            uid=uid,
+            valid_decisions=self.decision_function.keys(),
+        )
+
         self.log.info(f"[{uid}]模型返回json_list:\n{"".join(response.reply_text)}")
-        
-        async def execute_response_json(response_json:dict):
-            if decision := response_json.get("decision"):
-                
-                if fun := self.decision_function.get(decision):
-                    
-                    await fun(response_json, event)
-                    
-                else:
-                    self.log.error(f"[{uid}]无效decision:{response_json}")
-                
-            else:
-                self.log.error(f"[{uid}]返回json错误:{response_json}")
-        
-        for response_json in (extract_json_from_text(s) for s in response.reply_text if s != ""):
-            
-            if isinstance(response_json, dict):
-                
-                if response_list := response_json.get("actions"):
-                
-                    for response_json in response_list:
-                        
-                        await execute_response_json(response_json)
-                        
-                else:
-                    await execute_response_json(response_json)
-                    
-            elif response_json:
-                self.log.error(f"返回json解析不正确:{type(response_json)}")
-                # await event.send_client.send_group_merge_text(
-                #     group_id = group_id,
-                #     message = f"{response_json}",
-                #     source = "模型返回无法解析的格式",
-                # )
+
+        for response_json in actions:
+            await self.decision_function[response_json["decision"]](response_json, event)
         
         #存储更新等,因为直接返回的是那个对象所以可以直接改变,虽然中途会有其他协程拿到这个对象改变数值但是不应堵塞其他携程的聊天
         original_context.add_user_message(f"{prompt}\n最新用户消息:{event.llm_formatted_message}")
@@ -631,28 +718,21 @@ class GroupChat(ChatBasics):
             uid = uid
         )
 
+        response, actions = await self._validate_decision_with_retry(
+            response=response,
+            request=request,
+            message_builder=message_builder,
+            resend=lambda req: self._request_model_with_fallback_(
+                request=req, event=event, prompt=prompt, uid=uid
+            ),
+            uid=uid,
+            valid_decisions=self.decision_function.keys(),
+        )
+
         self.log.info(f"[{uid}]模型返回json_list:\n{"".join(response.reply_text)}")
-        
-        for response_json in (extract_json_from_text(s) for s in response.reply_text if s != ""):
-            
-            if isinstance(response_json, dict):
-                
-                for response_json in response_json.get("actions",[]):
-                    
-                    response_json:dict[str,str|int]
-                    if decision := response_json.get("decision"):
-                        
-                        if fun := self.decision_function.get(decision):
-                            
-                            await fun(response_json, event)
-                            
-                        else:
-                            self.log.error(f"[{uid}]无效decision:{response_json}")
-                        
-                    else:
-                        self.log.error(f"[{uid}]返回json错误:{response_json}")
-            else:
-                self.log.error(f"返回json解析不正确:{type(response_json)}")
+
+        for response_json in actions:
+            await self.decision_function[response_json["decision"]](response_json, event)
 
         original_context.add_user_message(prompt)
         original_context.extend(
@@ -788,10 +868,14 @@ class GroupChat(ChatBasics):
         
         if including_pictures:
             async def dispose_img(message:ImageSegment):
-                """刷新图片下载链接后直传 URL 给模型"""
+                """下载图片转 JPEG base64 嵌入,直传 QQ CDN 链接上游会拉取失败"""
                 new_url = await self._resolve_image_url(message, event.send_client)
-                if new_url:
-                    message_builder.add_image(new_url)
+                image_data = (
+                    await url_to_image_jpeg(new_url, file_name=message.file_name)
+                    if new_url else None
+                )
+                if image_data:
+                    message_builder.add_image_base64(image_data.data, image_data.mime)
                 elif message.text_description or message.summary:
                     desc = message.text_description or message.summary
                     message_builder.add_text(f"[CQ:image,summary:{desc}]")
@@ -1167,6 +1251,12 @@ class PrivateChat(ChatBasics):
             audio_sense=self.audio_sense,
         )
 
+        self.decision_function: Dict[str, Coroutine[Dict]] = {
+            "speak": self._private_speak_conduct,
+            "update": self.update_conduct,
+            "silence": self.silence_conduct,
+        }
+
     async def step(self, event: MessageEventEnvelope, prompt: str) -> None:
         """私聊 LLM 处理全流程"""
         user_id = event.user_id
@@ -1203,25 +1293,21 @@ class PrivateChat(ChatBasics):
             uid=uid,
         )
 
+        response, actions = await self._validate_decision_with_retry(
+            response=response,
+            request=request,
+            message_builder=message_builder,
+            resend=lambda req: self._request_model_with_fallback_private_(
+                request=req, event=event, prompt=prompt, uid=uid
+            ),
+            uid=uid,
+            valid_decisions=self.decision_function.keys(),
+        )
+
         self.log.info(f"[{uid}]私聊模型返回json_list:\n{''.join(response.reply_text)}")
 
-        for response_json in (extract_json_from_text(s) for s in response.reply_text if s != ""):
-            if isinstance(response_json, dict):
-                for action in response_json.get("actions", []):
-                    action: dict[str, str | int]
-                    if decision := action.get("decision"):
-                        if decision == "speak":
-                            await self._private_speak_conduct(action, event)
-                        elif decision == "update":
-                            await self.update_conduct(action, event)
-                        elif decision == "silence":
-                            await self.silence_conduct(action, event)
-                        else:
-                            self.log.error(f"[{uid}]无效decision:{action}")
-                    else:
-                        self.log.error(f"[{uid}]返回json错误:{action}")
-            else:
-                self.log.error(f"[{uid}]返回json解析不正确:{type(response_json)}")
+        for action in actions:
+            await self.decision_function[action["decision"]](action, event)
 
         original_context.add_user_message(f"{prompt}\n{event.llm_formatted_message}")
         original_context.extend(

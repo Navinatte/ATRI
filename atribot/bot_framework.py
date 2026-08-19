@@ -222,7 +222,7 @@ class BotFramework:
         trigger = container.get_by_type(TimeTriggerSupervisor)
         await trigger.start()
 
-        # self.create_background_task(self._start_admin_panel(), name="BotFramework.admin_panel")
+        self.create_background_task(self._start_admin_panel(), name="BotFramework.admin_panel")
 
     async def _start_admin_panel(self) -> None:
         """在独立端口启动 Web 管理面板"""
@@ -237,7 +237,26 @@ class BotFramework:
         )
         admin_app.include_router(admin_router)
 
-        admin_port = getattr(self.config.network, "admin_port", self.config.network.server_port + 1)
+        # 面板端口：优先读取 config.admin_panel.port，否则在第一个平台端口基础上 +1
+        default_port = 8080
+        for plat in getattr(self.config.platforms, "instances", {}).values():
+            port = getattr(plat, "port", None)
+            if port:
+                default_port = int(port)
+                break
+            # WebSocket_client 模式：从 url (host:port) 中提取端口
+            url = getattr(plat, "url", "") or ""
+            if ":" in url:
+                try:
+                    default_port = int(url.rsplit(":", 1)[1])
+                    break
+                except ValueError:
+                    continue
+        admin_panel_cfg = getattr(self.config, "admin_panel", None)
+        admin_port = int(getattr(admin_panel_cfg, "port", default_port + 1))
+
+
+        
         cfg = uvicorn.Config(
             admin_app,
             host="127.0.0.1",

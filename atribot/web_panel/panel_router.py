@@ -23,7 +23,12 @@ db:AsyncPostgreSQL = container.get("database")
 cfg:Logger = container.get("config")
 
 def _access_token() -> str:
-    return cfg.network.access_token
+    """从平台配置中读取第一个启用平台的 access_token"""
+    platforms = cfg.platforms.instances
+    for plat in platforms.values():
+        if getattr(plat, "access_token", None):
+            return str(plat.access_token)
+    return ""
 
 
 async def _auth(
@@ -54,12 +59,25 @@ async def api_status(_: None = Depends(_auth)) -> Dict[str, Any]:
     uptime = int(time.time() - _start_time)
     h, r = divmod(uptime, 3600)
     m, s = divmod(r, 60)
+
+    # 汇总所有已配置平台的连接类型与状态
+    platform_info: List[Dict[str, Any]] = []
+    for name, plat in cfg.platforms.instances.items():
+        platform_info.append(
+            {
+                "name": name,
+                "adapter": getattr(plat, "adapter", ""),
+                "connection_type": getattr(plat, "connection_type", ""),
+                "enabled": getattr(plat, "enabled", True),
+            }
+        )
+
     return {
         "account_id": cfg.account.id,
         "account_name": cfg.account.name,
         "model": cfg.model.connect.model_name,
         "supplier": cfg.model.connect.supplier,
-        "connection_type": cfg.network.connection_type,
+        "platforms": platform_info,
         "uptime": f"{h:02d}:{m:02d}:{s:02d}",
         "sandbox": container.exists("SandBox"),
         "mcp": container.exists("MCP"),

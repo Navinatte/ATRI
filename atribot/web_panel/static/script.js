@@ -129,6 +129,14 @@ async function loadDashboard() {
             let displayVal = val;
             if (typeof val === 'boolean') {
                 displayVal = val ? '🟢 已启用 / 运行中' : '🔴 未启用 / 已结束';
+            } else if (Array.isArray(val)) {
+                displayVal = val.map(item =>
+                    typeof item === 'object'
+                        ? `${item.name} (${item.connection_type})`
+                        : String(item)
+                ).join('、') || '-';
+            } else if (typeof val === 'object' && val !== null) {
+                displayVal = JSON.stringify(val);
             }
             statusHtml += `<tr><td style="width: 250px; font-weight:600; text-transform: capitalize">${key.replace(/_/g, ' ')}</td><td>${displayVal}</td></tr>`;
         }

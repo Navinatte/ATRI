@@ -61,6 +61,10 @@ TEXT_EXTENSIONS = {
 IMAGE_EXTENSIONS = {
     'jpg', 'jpeg', 'png', 'gif', 'psd',
 }
+AUDIO_EXTENSIONS = {
+    # 与 media_utils._AUDIO_FORMAT_MAP 的键保持一致
+    'mp3', 'ogg', 'wav', 'flac', 'aac', 'm4a', 'silk', 'amr', 'opus',
+}
 
 
 MESSAGE_DELAY = 1.5  # 多条消息间隔时间
@@ -287,9 +291,23 @@ class ChatBasics(ABC):
                         await dispose_video(segment)
                         continue
                     if isinstance(segment, FileSegment):
-                        if file_extension := segment.file_name.split('.')[-1].lower():
+                        if segment.file_name and (file_extension := segment.file_name.split('.')[-1].lower()):
                             if file_extension in IMAGE_EXTENSIONS:
                                 await dispose_img(segment)
+                                continue
+                            elif file_extension in AUDIO_EXTENSIONS:
+                                # 音频文件伪装成语音段,复用 dispose_audio 处理链路
+                                try:
+                                    await dispose_audio(RecordSegment(
+                                        file=segment.file,
+                                        file_name=segment.file_name,
+                                        url=segment.url,
+                                        path=segment.path,
+                                        file_size=segment.file_size,
+                                    ))
+                                except Exception as e:
+                                    self.log.warning(f"音频文件处理失败,降级为文件名提示: {e}")
+                                    message_builder.add_text(segment.__str__())
                                 continue
                             elif file_extension in TEXT_EXTENSIONS:
                                 message_builder.add_text(f"[CQ:file,file={segment.file_name},content={await download_text(segment.url)}]")
@@ -848,9 +866,23 @@ class GroupChat(ChatBasics):
                         await dispose_video(segment)
                         continue
                     if isinstance(segment, FileSegment):
-                        if file_extension := segment.file_name.split('.')[-1].lower():
+                        if segment.file_name and (file_extension := segment.file_name.split('.')[-1].lower()):
                             if file_extension in IMAGE_EXTENSIONS:
                                 await dispose_img(segment)
+                                continue
+                            elif file_extension in AUDIO_EXTENSIONS:
+                                # 音频文件伪装成语音段,复用 dispose_audio 处理链路
+                                try:
+                                    await dispose_audio(RecordSegment(
+                                        file=segment.file,
+                                        file_name=segment.file_name,
+                                        url=segment.url,
+                                        path=segment.path,
+                                        file_size=segment.file_size,
+                                    ))
+                                except Exception as e:
+                                    self.log.warning(f"音频文件处理失败,降级为文件名提示: {e}")
+                                    message_builder.add_text(segment.__str__())
                                 continue
                             elif file_extension in TEXT_EXTENSIONS:
                                 message_builder.add_text(f"[CQ:file,file={segment.file_name},content={await download_text(segment.url)}]")

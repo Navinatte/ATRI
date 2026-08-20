@@ -446,7 +446,7 @@ class ChatManager(ServiceBase):
                             )
                             if new_url:
                                 try:
-                                    desc = await self.media_processor.image_to_text(new_url)
+                                    desc = await self.media_processor.image_to_text(new_url, segment.file_name)
                                 except Exception:
                                     desc = "<描述获取失败>"
                             else:
@@ -468,7 +468,7 @@ class ChatManager(ServiceBase):
                         else:
                             if not segment.text_description:
                                 try:
-                                    desc = await self.media_processor.audio_to_text(audio_url)
+                                    desc = await self.media_processor.audio_to_text(audio_url, segment.file_name)
                                     segment.text_description = desc
                                 except Exception:
                                     segment.text_description = "<描述获取失败>"
@@ -535,7 +535,8 @@ class ChatManager(ServiceBase):
                                     if not audio_segment.text_description:
                                         try:
                                             audio_segment.text_description = await self.media_processor.audio_to_text(
-                                                audio_segment.url or audio_segment.file.file
+                                                audio_segment.url or audio_segment.file.file,
+                                                audio_segment.file_name,
                                             )
                                         except Exception:
                                             audio_segment.text_description = "<描述获取失败>"

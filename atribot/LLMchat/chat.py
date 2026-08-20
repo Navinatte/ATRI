@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import time
 import uuid
@@ -8,6 +9,7 @@ from typing import Any, Callable, Coroutine, Dict, Iterable, List
 
 from atribot.common_utils import (
     AUDIO_EXTENSIONS,
+    IMAGE_EXTENSIONS,
     download_text,
     extract_json_from_text,
     refresh_image_download_url,
@@ -59,9 +61,6 @@ TEXT_EXTENSIONS = {
     'html', 'htm', 'css',
     # 编程语言
     'py', 'js', 'java', 'c', 'cpp', 'php', 'rb', 'kt', 'sh', 'bash', 'bat', 'cmd', 'ps1', 'sql',
-}
-IMAGE_EXTENSIONS = {
-    'jpg', 'jpeg', 'png', 'gif', 'psd',
 }
 
 
@@ -288,6 +287,95 @@ class ChatBasics(ABC):
             log=self.log,
         )
 
+    async def _pre_recognize_media(
+        self,
+        segments_list: List[List[MessageSegment]],
+        send_client: SendClientBase | None,
+    ) -> None:
+        """并行预识别一批消息段中需要转文字的媒体(media_*_to_text 路径)
+
+        仅用于 including_* = False 的文本降级路径:多张图串行识别会成倍放大延迟,
+        这里用 asyncio.gather 并行发起,全部完成后再构建提示词。
+        识别结果写入 segment.text_description 内存缓存(磁盘缓存由
+        MediaProcessor 内部负责),后续构建阶段直接命中不再重复请求。
+
+        Args:
+            segments_list: 多条消息的消息段列表(如当前消息 + 引用消息)
+            send_client: 发送客户端,用于刷新图片下载链接
+        """
+        tasks: List[asyncio.Task] = []
+
+        async def recognize_image(segment: ImageSegment) -> None:
+            if segment.text_description:
+                return
+            new_url = await self._resolve_image_url(segment, send_client)
+            desc = (
+                await self.media_processor.image_to_text(new_url, segment.file_name)
+                if new_url else "图片已过期无法识别"
+            )
+            segment.text_description = desc
+            self.log.info(f"图像识别文本结果:{desc}")
+
+        async def recognize_audio(segment: RecordSegment) -> None:
+            if segment.text_description:
+                return
+            audio_url = segment.url or segment.file.file
+            desc = await self.media_processor.audio_to_text(audio_url, segment.file_name)
+            segment.text_description = desc
+            self.log.info(f"音频识别文本结果:{desc}")
+
+        async def recognize_video(segment: VideoSegment) -> None:
+            if segment.text_description:
+                return
+            video_url = segment.url or segment.file.file
+            desc = await self.media_processor.video_to_text(video_url, segment.file_name)
+            segment.text_description = desc
+            self.log.info(f"视频识别文本结果:{desc}")
+
+        for segments in segments_list:
+            for segment in segments:
+                if isinstance(segment, ImageSegment):
+                    tasks.append(asyncio.create_task(recognize_image(segment)))
+                elif isinstance(segment, RecordSegment):
+                    tasks.append(asyncio.create_task(recognize_audio(segment)))
+                elif isinstance(segment, VideoSegment):
+                    tasks.append(asyncio.create_task(recognize_video(segment)))
+                elif isinstance(segment, FileSegment):
+                    # 文件形式的媒体按扩展名伪装成对应媒体段预识别
+                    file_name = segment.file_name or ""
+                    ext = file_name.split(".")[-1].lower() if "." in file_name else ""
+                    if ext in IMAGE_EXTENSIONS:
+                        fake = ImageSegment(
+                            file=segment.file,
+                            file_name=segment.file_name,
+                            url=segment.url,
+                            path=segment.path,
+                            file_size=segment.file_size,
+                        )
+                        tasks.append(asyncio.create_task(recognize_image(fake)))
+                    elif ext in AUDIO_EXTENSIONS:
+                        fake = RecordSegment(
+                            file=segment.file,
+                            file_name=segment.file_name,
+                            url=segment.url,
+                            path=segment.path,
+                            file_size=segment.file_size,
+                        )
+                        tasks.append(asyncio.create_task(recognize_audio(fake)))
+
+        if not tasks:
+            return
+
+        self.log.info(f"并行预识别 {len(tasks)} 个媒体段...")
+        done, pending = await asyncio.wait(tasks)
+        if pending:
+            self.log.warning(f"媒体预识别有 {len(pending)} 个任务未完成")
+            for p in pending:
+                p.cancel()
+        errors = [t for t in done if not t.cancelled() and t.exception()]
+        for t in errors:
+            self.log.warning(f"媒体预识别任务失败: {t.exception()!r}")
+
     async def append_message_segments_prompt(
         self,
         event: MessageEventEnvelope,
@@ -299,6 +387,10 @@ class ChatBasics(ABC):
         """为当前用户输入附加结构化的消息片段"""
         segments = event.event.segments
         Segment = segments[0] if segments else None
+
+        # 文本降级路径先并行预识别全部媒体,避免构建阶段串行等待
+        await self._pre_recognize_media([segments], event.send_client)
+
         message_builder.add_text(
             f"最新用户消息:\n<MESSAGE>"
             f"<user_id>{event.user_id}</user_id>"
@@ -330,7 +422,7 @@ class ChatBasics(ABC):
                 else:
                     new_url = await self._resolve_image_url(message, event.send_client)
                     if new_url:
-                        desc = await self.media_processor.image_to_text(new_url)
+                        desc = await self.media_processor.image_to_text(new_url, message.file_name)
                     else:
                         desc = "图片已过期无法识别"
                     message.text_description = desc
@@ -856,6 +948,13 @@ class GroupChat(ChatBasics):
         
         Segment = event.event.segments[0] if event.event.segments else None
 
+        # 文本降级路径先并行预识别(当前消息 + 引用消息),避免构建阶段串行等待
+        pre_segments: List[List[MessageSegment]] = [list(event.event.segments)]
+        if isinstance(Segment, ReplySegment):
+            if quote := await event.send_client.get_msg_details(Segment.message_id):
+                pre_segments.append(list(quote.event.segments))
+        await self._pre_recognize_media(pre_segments, event.send_client)
+
         message_builder.add_text(
             f"最新用户消息:\n<MESSAGE>"
             f"<user_id>{event.user_id}</user_id>"
@@ -908,7 +1007,7 @@ class GroupChat(ChatBasics):
                     if segment.text_description:
                         desc = segment.text_description
                     else:
-                        desc = await self.media_processor.audio_to_text(audio_url)
+                        desc = await self.media_processor.audio_to_text(audio_url, segment.file_name)
                         segment.text_description = desc
                     message_builder.add_text(f"[CQ:record,summary:{desc}]")
         else:
@@ -918,7 +1017,7 @@ class GroupChat(ChatBasics):
                 if segment.text_description:
                     desc = segment.text_description
                 else:
-                    desc = await self.media_processor.audio_to_text(audio_url)
+                    desc = await self.media_processor.audio_to_text(audio_url, segment.file_name)
                     segment.text_description = desc
                     self.log.info(f"音频识别:{desc}]")
                 message_builder.add_text(f"[CQ:record,summary:{desc}]")
@@ -939,7 +1038,7 @@ class GroupChat(ChatBasics):
                 if segment.text_description:
                     desc = segment.text_description
                 else:
-                    desc = await self.media_processor.video_to_text(video_url)
+                    desc = await self.media_processor.video_to_text(video_url, segment.file_name)
                     segment.text_description = desc
                     self.log.info(f"视频识别结果:{desc}")
                 message_builder.add_text(f"[CQ:video,summary:{desc}]")

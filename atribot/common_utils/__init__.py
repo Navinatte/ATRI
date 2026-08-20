@@ -3,6 +3,7 @@ from .db_format import format_memory_records
 from .file.file_utils import download_binary, resolve_file_to_bytes
 from .file.image_utils import (
     compress_image,
+    convert_to_jpeg,
     refresh_image_download_url,
     url_to_base64,
     url_to_image_jpeg,
@@ -10,6 +11,7 @@ from .file.image_utils import (
 )
 from .file.media_utils import (
     AUDIO_EXTENSIONS,
+    IMAGE_EXTENSIONS,
     MediaConvertResult,
     url_to_audio_base64,
     url_to_audio_mp3,
@@ -37,9 +39,11 @@ from .validation import is_qq
 
 __all__ = [
     "AUDIO_EXTENSIONS",
+    "IMAGE_EXTENSIONS",
     "ClusterUtils",
     "calculate_similarity",
     "compress_image",
+    "convert_to_jpeg",
     "convert_to_jpeg",
     "construction_message_dict",
     "download_binary",

@@ -39,6 +39,7 @@ document/temp/
 
 # 神秘小巧思
 atri-3d/
+temp/
 
 # 本地环境配置
 .env

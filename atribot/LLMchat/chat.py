@@ -1,18 +1,14 @@
-import asyncio
 import datetime
 import time
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import replace
 from logging import Logger
-from typing import Any, Callable, Coroutine, Dict, Iterable, List
+from typing import Coroutine, Dict, List
 
 from atribot.common_utils import (
-    AUDIO_EXTENSIONS,
-    IMAGE_EXTENSIONS,
     download_text,
     extract_json_from_text,
-    refresh_image_download_url,
     url_to_audio_mp3,
     url_to_image_jpeg,
     url_to_video_mp4,
@@ -41,7 +37,6 @@ from atribot.LLMchat.LLM_supervisor import (
     LLMSRequestFailed,
 )
 from atribot.LLMchat.MCP.tool_calls import ToolCalls
-from atribot.LLMchat.MCP.tool_model import ToolSet
 from atribot.LLMchat.media_processor import MediaProcessor
 from atribot.LLMchat.memory.memory_system import MemorySystem
 from atribot.LLMchat.memory.user_info_system import UserSystem
@@ -62,13 +57,15 @@ TEXT_EXTENSIONS = {
     # 编程语言
     'py', 'js', 'java', 'c', 'cpp', 'php', 'rb', 'kt', 'sh', 'bash', 'bat', 'cmd', 'ps1', 'sql',
 }
+IMAGE_EXTENSIONS = {
+    'jpg', 'jpeg', 'png', 'gif', 'psd',
+}
 
 
 MESSAGE_DELAY = 1.5  # 多条消息间隔时间
 MAX_SINGLE_MESSAGE_LENGTH = 4  # 分条发送长度阈值
 LLM_COOLDOWN_THRESHOLD = 5 #间隔时间,防止多条消息同时发送
 STRING_LENGTH_LIMIT = 500 #字符串长度限制
-MAX_INVALID_DECISION_RETRIES = 2 #模型输出无效decision时,追加报错重试的最大次数
 
 class ChatBasics(ABC):
     """聊天基类"""
@@ -101,121 +98,6 @@ class ChatBasics(ABC):
         self.config: atriConfig = config
         self.log: Logger = log
         self.build_prompt = build_prompt()
-        
-        self.template_request_simplify :GenerationRequestSimplify
-        """构建请求缓存"""
-
-    def _prepare_round_toolset(self) -> ToolSet | None:
-        """为当前对话轮次创建独立的工具集合副本
-
-        Returns:
-            本轮独立的工具集合副本；模板无工具集合时返回 None
-        """
-        template_toolset = self.template_request_simplify.tool_json
-        return (
-            template_toolset.copy() if template_toolset is not None else None
-        )
-
-    def _extract_valid_actions(
-        self,
-        response: GenerationResponse,
-        valid_decisions: Iterable[str],
-    ) -> tuple[List[Dict], List[str]]:
-        """解析模型回复中的actions,分离出合法项与错误描述
-
-        Args:
-            response: 模型响应
-            valid_decisions: 合法的decision集合
-
-        Returns:
-            (合法action列表, 错误描述列表)
-        """
-        valid_set = set(valid_decisions)
-        actions: List[Dict] = []
-        errors: List[str] = []
-
-        for response_json in (
-            extract_json_from_text(s) for s in response.reply_text if s != ""
-        ):
-            if not isinstance(response_json, dict):
-                if response_json:
-                    errors.append(f"返回json解析不正确:{type(response_json)}")
-                continue
-
-            inner_actions = response_json.get("actions")
-            if inner_actions is None:
-                inner_actions = [response_json]
-
-            for action in inner_actions:
-                if not isinstance(action, dict):
-                    errors.append(f"返回json解析不正确:{type(action)}")
-                    continue
-                decision = action.get("decision")
-                if not decision:
-                    errors.append(f"返回json缺少decision字段:{action}")
-                elif decision not in valid_set:
-                    errors.append(
-                        f"无效decision:{action}"
-                        f"(decision只能是{','.join(sorted(valid_set))}其中之一)"
-                    )
-                else:
-                    actions.append(action)
-
-        return actions, errors
-
-    async def _validate_decision_with_retry(
-        self,
-        response: GenerationResponse,
-        request: GenerationRequestSimplify,
-        message_builder: MessageBuilder,
-        resend: Callable[[GenerationRequestSimplify], Coroutine[Any, Any, GenerationResponse]],
-        uid: str,
-        valid_decisions: Iterable[str],
-    ) -> tuple[GenerationResponse, List[Dict]]:
-        """校验模型返回的decision,输出无效时把报错追加到提示词尾部重试请求
-
-        Args:
-            response: 首次请求的模型响应
-            request: 首次请求使用的请求体
-            message_builder: 本次增量消息的构建器,重试的报错提示会追加到其尾部
-            resend: 使用更新后请求体重新请求模型的回调
-            uid: 唯一响应标识
-            valid_decisions: 合法的decision集合
-
-        Returns:
-            (最终使用的模型响应, 待执行的合法action列表)
-        """
-        valid_set = set(valid_decisions)
-        actions, errors = self._extract_valid_actions(response, valid_set)
-
-        for attempt in range(1, MAX_INVALID_DECISION_RETRIES + 1):
-            if not errors:
-                return response, actions
-
-            self.log.warning(
-                f"[{uid}]模型输出存在无效decision,第{attempt}次追加报错重试:"
-                f"\n{'\n'.join(errors)}"
-                f"\n原始回复:\n{''.join(response.reply_text)}"
-            )
-            message_builder.add_text(
-                "\n<retry_feedback>"
-                "你上一次的输出存在以下错误:\n"
-                f"{'\n'.join(errors)}\n"
-                "这是不允许的。decision只能从以下值中选择:"
-                f"{','.join(sorted(valid_set))}\n"
-                "请重新检查要求,重新输出包含正确actions的合法JSON"
-                "</retry_feedback>"
-            )
-            response = await resend(
-                replace(request, increment_messages=[message_builder.build()])
-            )
-            actions, errors = self._extract_valid_actions(response, valid_set)
-
-        if errors:
-            for error in errors:
-                self.log.error(f"[{uid}]重试后模型仍输出无效内容:{error}")
-
-        return response, actions
 
     @abstractmethod
     async def step(self) -> None:
@@ -260,122 +142,6 @@ class ChatBasics(ABC):
         """保持沉默（通用）"""
         self.log.info(f"LLM决定静默理由:{response_json.get('reason')}")
 
-    async def _resolve_image_url(
-        self,
-        segment: ImageSegment,
-        send_client: SendClientBase | None,
-    ) -> str | None:
-        """解析可用于模型请求的图片 URL
-
-        QQ 图片 CDN 链接的 ``rkey`` 签名有时效性,过期后中转服务器无法下载。
-        优先通过 OneBot ``get_image`` API 以 file_id 刷新一张新鲜链接,
-        确保中转能直接 fetch;刷新失败返回 ``None``,由调用方降级为文本描述。
-
-        Args:
-            segment: 图片消息段(需含 url 与 file_name/file_id)
-            send_client: 发送客户端,用于刷新链接;为 None 时无法刷新
-
-        Returns:
-            新鲜可用的 http(s) 图片 URL;无法刷新返回 None
-        """
-        url = segment.url or (segment.file.file if segment.file else None)
-        if not url or not (url.startswith("http://") or url.startswith("https://")):
-            return None
-        return await refresh_image_download_url(
-            file_id=segment.file_name,
-            send_client=send_client,
-            log=self.log,
-        )
-
-    async def _pre_recognize_media(
-        self,
-        segments_list: List[List[MessageSegment]],
-        send_client: SendClientBase | None,
-    ) -> None:
-        """并行预识别一批消息段中需要转文字的媒体(media_*_to_text 路径)
-
-        仅用于 including_* = False 的文本降级路径:多张图串行识别会成倍放大延迟,
-        这里用 asyncio.gather 并行发起,全部完成后再构建提示词。
-        识别结果写入 segment.text_description 内存缓存(磁盘缓存由
-        MediaProcessor 内部负责),后续构建阶段直接命中不再重复请求。
-
-        Args:
-            segments_list: 多条消息的消息段列表(如当前消息 + 引用消息)
-            send_client: 发送客户端,用于刷新图片下载链接
-        """
-        tasks: List[asyncio.Task] = []
-
-        async def recognize_image(segment: ImageSegment) -> None:
-            if segment.text_description:
-                return
-            new_url = await self._resolve_image_url(segment, send_client)
-            desc = (
-                await self.media_processor.image_to_text(new_url, segment.file_name)
-                if new_url else "图片已过期无法识别"
-            )
-            segment.text_description = desc
-            self.log.info(f"图像识别文本结果:{desc}")
-
-        async def recognize_audio(segment: RecordSegment) -> None:
-            if segment.text_description:
-                return
-            audio_url = segment.url or segment.file.file
-            desc = await self.media_processor.audio_to_text(audio_url, segment.file_name)
-            segment.text_description = desc
-            self.log.info(f"音频识别文本结果:{desc}")
-
-        async def recognize_video(segment: VideoSegment) -> None:
-            if segment.text_description:
-                return
-            video_url = segment.url or segment.file.file
-            desc = await self.media_processor.video_to_text(video_url, segment.file_name)
-            segment.text_description = desc
-            self.log.info(f"视频识别文本结果:{desc}")
-
-        for segments in segments_list:
-            for segment in segments:
-                if isinstance(segment, ImageSegment):
-                    tasks.append(asyncio.create_task(recognize_image(segment)))
-                elif isinstance(segment, RecordSegment):
-                    tasks.append(asyncio.create_task(recognize_audio(segment)))
-                elif isinstance(segment, VideoSegment):
-                    tasks.append(asyncio.create_task(recognize_video(segment)))
-                elif isinstance(segment, FileSegment):
-                    # 文件形式的媒体按扩展名伪装成对应媒体段预识别
-                    file_name = segment.file_name or ""
-                    ext = file_name.split(".")[-1].lower() if "." in file_name else ""
-                    if ext in IMAGE_EXTENSIONS:
-                        fake = ImageSegment(
-                            file=segment.file,
-                            file_name=segment.file_name,
-                            url=segment.url,
-                            path=segment.path,
-                            file_size=segment.file_size,
-                        )
-                        tasks.append(asyncio.create_task(recognize_image(fake)))
-                    elif ext in AUDIO_EXTENSIONS:
-                        fake = RecordSegment(
-                            file=segment.file,
-                            file_name=segment.file_name,
-                            url=segment.url,
-                            path=segment.path,
-                            file_size=segment.file_size,
-                        )
-                        tasks.append(asyncio.create_task(recognize_audio(fake)))
-
-        if not tasks:
-            return
-
-        self.log.info(f"并行预识别 {len(tasks)} 个媒体段...")
-        done, pending = await asyncio.wait(tasks)
-        if pending:
-            self.log.warning(f"媒体预识别有 {len(pending)} 个任务未完成")
-            for p in pending:
-                p.cancel()
-        errors = [t for t in done if not t.cancelled() and t.exception()]
-        for t in errors:
-            self.log.warning(f"媒体预识别任务失败: {t.exception()!r}")
-
     async def append_message_segments_prompt(
         self,
         event: MessageEventEnvelope,
@@ -387,10 +153,6 @@ class ChatBasics(ABC):
         """为当前用户输入附加结构化的消息片段"""
         segments = event.event.segments
         Segment = segments[0] if segments else None
-
-        # 文本降级路径先并行预识别全部媒体,避免构建阶段串行等待
-        await self._pre_recognize_media([segments], event.send_client)
-
         message_builder.add_text(
             f"最新用户消息:\n<MESSAGE>"
             f"<user_id>{event.user_id}</user_id>"
@@ -403,28 +165,17 @@ class ChatBasics(ABC):
 
         if including_pictures:
             async def dispose_img(message: ImageSegment):
-                new_url = await self._resolve_image_url(message, event.send_client)
-                image_data = (
-                    await url_to_image_jpeg(new_url, file_name=message.file_name)
-                    if new_url else None
-                )
-                if image_data:
-                    message_builder.add_image_base64(image_data.data, image_data.mime)
-                elif message.text_description or message.summary:
-                    desc = message.text_description or message.summary
-                    message_builder.add_text(f"[CQ:image,summary:{desc}]")
+                result = await url_to_image_jpeg(message.url, file_name=message.file_name)
+                if result is not None:
+                    message_builder.add_image_base64(result.data, result.mime)
                 else:
-                    message_builder.add_text("[CQ:image,summary=图片已过期无法识别]")
+                    message_builder.add_text("[CQ:image,summary=图片出现问题]")
         else:
             async def dispose_img(message: ImageSegment):
                 if message.text_description:
                     desc = message.text_description
                 else:
-                    new_url = await self._resolve_image_url(message, event.send_client)
-                    if new_url:
-                        desc = await self.media_processor.image_to_text(new_url, message.file_name)
-                    else:
-                        desc = "图片已过期无法识别"
+                    desc = await self.media_processor.image_to_text(message.url)
                     message.text_description = desc
                     self.log.info(f"图像识别文本结果:{desc}")
                 message_builder.add_text(f"[CQ:image,summary:{desc}]")
@@ -462,7 +213,7 @@ class ChatBasics(ABC):
                 if result is not None:
                     message_builder.add_video_base64(result.data, result.mime)
                 else:
-                    message_builder.add_text(f"[CQ:video,file={segment.file_name or 'unknown'},summary=视频已过期无法识别]")
+                    message_builder.add_video(video_url)
         else:
             async def dispose_video(segment: VideoSegment) -> None:
                 video_url = segment.url or segment.file.file
@@ -487,34 +238,9 @@ class ChatBasics(ABC):
                         await dispose_video(segment)
                         continue
                     if isinstance(segment, FileSegment):
-                        if segment.file_name and (file_extension := segment.file_name.split('.')[-1].lower()):
+                        if file_extension := segment.file_name.split('.')[-1].lower():
                             if file_extension in IMAGE_EXTENSIONS:
-                                # 图片文件伪装成图片段,复用 dispose_img 处理链路
-                                try:
-                                    await dispose_img(ImageSegment(
-                                        file=segment.file,
-                                        file_name=segment.file_name,
-                                        url=segment.url,
-                                        path=segment.path,
-                                        file_size=segment.file_size,
-                                    ))
-                                except Exception as e:
-                                    self.log.warning(f"图片文件处理失败: {e}")
-                                    message_builder.add_text(segment.__str__())
-                                continue
-                            elif file_extension in AUDIO_EXTENSIONS:
-                                # 音频文件伪装成语音段,复用 dispose_audio 处理链路
-                                try:
-                                    await dispose_audio(RecordSegment(
-                                        file=segment.file,
-                                        file_name=segment.file_name,
-                                        url=segment.url,
-                                        path=segment.path,
-                                        file_size=segment.file_size,
-                                    ))
-                                except Exception as e:
-                                    self.log.warning(f"音频文件处理失败,降级为文件名提示: {e}")
-                                    message_builder.add_text(segment.__str__())
+                                await dispose_img(segment)
                                 continue
                             elif file_extension in TEXT_EXTENSIONS:
                                 message_builder.add_text(f"[CQ:file,file={segment.file_name},content={await download_text(segment.url)}]")
@@ -658,8 +384,6 @@ class GroupChat(ChatBasics):
             including_videos=self.video_sense,
         )
         
-        round_toolset = self._prepare_round_toolset()
-        
         original_context:Context = await self.get_chat_context(
             group_id = group_id,
             user_id = user_id
@@ -669,8 +393,7 @@ class GroupChat(ChatBasics):
             self.template_request_simplify,
             increment_messages=[message_builder.build()],
             messages=original_context.get_messages(),
-            message_data=event,
-            tool_json=round_toolset,
+            message_data=event
         )
         
         response = await self._request_model_with_fallback_(
@@ -680,21 +403,41 @@ class GroupChat(ChatBasics):
             uid = uid
         )
 
-        response, actions = await self._validate_decision_with_retry(
-            response=response,
-            request=request,
-            message_builder=message_builder,
-            resend=lambda req: self._request_model_with_fallback_(
-                request=req, event=event, prompt=prompt, uid=uid
-            ),
-            uid=uid,
-            valid_decisions=self.decision_function.keys(),
-        )
-
         self.log.info(f"[{uid}]模型返回json_list:\n{"".join(response.reply_text)}")
-
-        for response_json in actions:
-            await self.decision_function[response_json["decision"]](response_json, event)
+        
+        async def execute_response_json(response_json:dict):
+            if decision := response_json.get("decision"):
+                
+                if fun := self.decision_function.get(decision):
+                    
+                    await fun(response_json, event)
+                    
+                else:
+                    self.log.error(f"[{uid}]无效decision:{response_json}")
+                
+            else:
+                self.log.error(f"[{uid}]返回json错误:{response_json}")
+        
+        for response_json in (extract_json_from_text(s) for s in response.reply_text if s != ""):
+            
+            if isinstance(response_json, dict):
+                
+                if response_list := response_json.get("actions"):
+                
+                    for response_json in response_list:
+                        
+                        await execute_response_json(response_json)
+                        
+                else:
+                    await execute_response_json(response_json)
+                    
+            else:
+                self.log.error(f"返回json解析不正确:{type(response_json)}")
+                await event.send_client.send_group_merge_text(
+                    group_id = group_id,
+                    message = f"{response_json}",
+                    source = "模型返回无法解析的格式",
+                )
         
         #存储更新等,因为直接返回的是那个对象所以可以直接改变,虽然中途会有其他协程拿到这个对象改变数值但是不应堵塞其他携程的聊天
         original_context.add_user_message(f"{prompt}\n最新用户消息:{event.llm_formatted_message}")
@@ -763,7 +506,6 @@ class GroupChat(ChatBasics):
             including_pictures=self.visual_sense,
             including_audios=self.audio_sense,
             including_videos=self.video_sense,
-            send_client=event.send_client,
         )
         message_builder.add_text_left(
             self.skills.prompt #skills的提示词
@@ -792,15 +534,12 @@ class GroupChat(ChatBasics):
             )
         else:
             original_context = self.chat_manager.get_group_context(group_id)
-
-        round_toolset = self._prepare_round_toolset()
-
+            
         request: GenerationRequestSimplify = replace(
             self.template_request_simplify,
             increment_messages=[message_builder.build()],
             messages=original_context.get_messages(),
-            message_data=event,
-            tool_json=round_toolset,
+            message_data=event
         )
         
         response = await self._request_model_with_fallback_(
@@ -810,21 +549,28 @@ class GroupChat(ChatBasics):
             uid = uid
         )
 
-        response, actions = await self._validate_decision_with_retry(
-            response=response,
-            request=request,
-            message_builder=message_builder,
-            resend=lambda req: self._request_model_with_fallback_(
-                request=req, event=event, prompt=prompt, uid=uid
-            ),
-            uid=uid,
-            valid_decisions=self.decision_function.keys(),
-        )
-
         self.log.info(f"[{uid}]模型返回json_list:\n{"".join(response.reply_text)}")
-
-        for response_json in actions:
-            await self.decision_function[response_json["decision"]](response_json, event)
+        
+        for response_json in (extract_json_from_text(s) for s in response.reply_text if s != ""):
+            
+            if isinstance(response_json, dict):
+                
+                for response_json in response_json.get("actions",[]):
+                    
+                    response_json:dict[str,str|int]
+                    if decision := response_json.get("decision"):
+                        
+                        if fun := self.decision_function.get(decision):
+                            
+                            await fun(response_json, event)
+                            
+                        else:
+                            self.log.error(f"[{uid}]无效decision:{response_json}")
+                        
+                    else:
+                        self.log.error(f"[{uid}]返回json错误:{response_json}")
+            else:
+                self.log.error(f"返回json解析不正确:{type(response_json)}")
 
         original_context.add_user_message(prompt)
         original_context.extend(
@@ -898,16 +644,10 @@ class GroupChat(ChatBasics):
             including_pictures=including_pictures,
             including_audios=including_audios,
             including_videos=including_videos,
-            send_client=event.send_client,
         )
-        
-        if deferred_prompt := self.tool_calls.get_deferred_tools_prompt("group_chat"):
-            message_builder.add_text_left(deferred_prompt+self.skills.prompt)#待发现工具的提示词
-        else:
-            message_builder.add_text_left(
-                self.skills.prompt#skills的提示词
-            )
-        
+        message_builder.add_text_left(
+            self.skills.prompt #skills的提示词
+        )
         await self.append_message_segments_prompt(
             event,
             message_builder,
@@ -948,13 +688,6 @@ class GroupChat(ChatBasics):
         
         Segment = event.event.segments[0] if event.event.segments else None
 
-        # 文本降级路径先并行预识别(当前消息 + 引用消息),避免构建阶段串行等待
-        pre_segments: List[List[MessageSegment]] = [list(event.event.segments)]
-        if isinstance(Segment, ReplySegment):
-            if quote := await event.send_client.get_msg_details(Segment.message_id):
-                pre_segments.append(list(quote.event.segments))
-        await self._pre_recognize_media(pre_segments, event.send_client)
-
         message_builder.add_text(
             f"最新用户消息:\n<MESSAGE>"
             f"<user_id>{event.user_id}</user_id>"
@@ -967,30 +700,19 @@ class GroupChat(ChatBasics):
         
         if including_pictures:
             async def dispose_img(message:ImageSegment):
-                """下载图片转 JPEG base64 嵌入,直传 QQ CDN 链接上游会拉取失败"""
-                new_url = await self._resolve_image_url(message, event.send_client)
-                image_data = (
-                    await url_to_image_jpeg(new_url, file_name=message.file_name)
-                    if new_url else None
-                )
-                if image_data:
-                    message_builder.add_image_base64(image_data.data, image_data.mime)
-                elif message.text_description or message.summary:
-                    desc = message.text_description or message.summary
-                    message_builder.add_text(f"[CQ:image,summary:{desc}]")
+                """给自己解析图像"""
+                result = await url_to_image_jpeg(message.url, file_name=message.file_name)
+                if result is not None:
+                    message_builder.add_image_base64(result.data, result.mime)
                 else:
-                    message_builder.add_text("[CQ:image,summary=图片已过期无法识别]")
+                    message_builder.add_text("[CQ:image,summary=图片下载出现问题]")
         else:
             async def dispose_img(message:ImageSegment):
                 """交给其他模型识别图像转换文字"""
                 if message.text_description:
                     desc = message.text_description
                 else:
-                    new_url = await self._resolve_image_url(message, event.send_client)
-                    if new_url:
-                        desc = await self.media_processor.image_to_text(new_url)
-                    else:
-                        desc = "图片已过期无法识别"
+                    desc = await self.media_processor.image_to_text(message.url)
                     message.text_description = desc
                     self.log.info(f"输入图片描述:{desc}]")
                 message_builder.add_text(f"[CQ:image,summary:{desc}]")
@@ -1007,7 +729,7 @@ class GroupChat(ChatBasics):
                     if segment.text_description:
                         desc = segment.text_description
                     else:
-                        desc = await self.media_processor.audio_to_text(audio_url, segment.file_name)
+                        desc = await self.media_processor.audio_to_text(audio_url)
                         segment.text_description = desc
                     message_builder.add_text(f"[CQ:record,summary:{desc}]")
         else:
@@ -1017,20 +739,20 @@ class GroupChat(ChatBasics):
                 if segment.text_description:
                     desc = segment.text_description
                 else:
-                    desc = await self.media_processor.audio_to_text(audio_url, segment.file_name)
+                    desc = await self.media_processor.audio_to_text(audio_url)
                     segment.text_description = desc
                     self.log.info(f"音频识别:{desc}]")
                 message_builder.add_text(f"[CQ:record,summary:{desc}]")
 
         if including_videos:
             async def dispose_video(segment: VideoSegment) -> None:
-                """将视频转为 mp4 base64,下载失败时降级为文本描述"""
+                """将视频转为 mp4 base64,失败时直接传入视频 URL 供模型理解"""
                 video_url = segment.url or segment.file.file
                 result = await url_to_video_mp4(video_url, segment.file_name)
                 if result is not None:
                     message_builder.add_video_base64(result.data, result.mime)
                 else:
-                    message_builder.add_text(f"[CQ:video,file={segment.file_name or 'unknown'},summary=视频已过期无法识别]")
+                    message_builder.add_video(video_url)
         else:
             async def dispose_video(segment: VideoSegment) -> None:
                 """交给其他模型将视频转为文字"""
@@ -1038,7 +760,7 @@ class GroupChat(ChatBasics):
                 if segment.text_description:
                     desc = segment.text_description
                 else:
-                    desc = await self.media_processor.video_to_text(video_url, segment.file_name)
+                    desc = await self.media_processor.video_to_text(video_url)
                     segment.text_description = desc
                     self.log.info(f"视频识别结果:{desc}")
                 message_builder.add_text(f"[CQ:video,summary:{desc}]")
@@ -1057,34 +779,9 @@ class GroupChat(ChatBasics):
                         await dispose_video(segment)
                         continue
                     if isinstance(segment, FileSegment):
-                        if segment.file_name and (file_extension := segment.file_name.split('.')[-1].lower()):
+                        if file_extension := segment.file_name.split('.')[-1].lower():
                             if file_extension in IMAGE_EXTENSIONS:
-                                # 图片文件伪装成图片段,复用 dispose_img 处理链路
-                                try:
-                                    await dispose_img(ImageSegment(
-                                        file=segment.file,
-                                        file_name=segment.file_name,
-                                        url=segment.url,
-                                        path=segment.path,
-                                        file_size=segment.file_size,
-                                    ))
-                                except Exception as e:
-                                    self.log.warning(f"图片文件处理失败: {e}")
-                                    message_builder.add_text(segment.__str__())
-                                continue
-                            elif file_extension in AUDIO_EXTENSIONS:
-                                # 音频文件伪装成语音段,复用 dispose_audio 处理链路
-                                try:
-                                    await dispose_audio(RecordSegment(
-                                        file=segment.file,
-                                        file_name=segment.file_name,
-                                        url=segment.url,
-                                        path=segment.path,
-                                        file_size=segment.file_size,
-                                    ))
-                                except Exception as e:
-                                    self.log.warning(f"音频文件处理失败: {e}")
-                                    message_builder.add_text(segment.__str__())
+                                await dispose_img(segment)
                                 continue
                             elif file_extension in TEXT_EXTENSIONS:
                                 message_builder.add_text(f"[CQ:file,file={segment.file_name},content={await download_text(segment.url)}]")
@@ -1350,12 +1047,6 @@ class PrivateChat(ChatBasics):
             audio_sense=self.audio_sense,
         )
 
-        self.decision_function: Dict[str, Coroutine[Dict]] = {
-            "speak": self._private_speak_conduct,
-            "update": self.update_conduct,
-            "silence": self.silence_conduct,
-        }
-
     async def step(self, event: MessageEventEnvelope, prompt: str) -> None:
         """私聊 LLM 处理全流程"""
         user_id = event.user_id
@@ -1375,14 +1066,11 @@ class PrivateChat(ChatBasics):
         private_context_obj = await self.chat_manager.get_private_context(user_id)
         original_context: Context = private_context_obj.chat_context
 
-        round_toolset = self._prepare_round_toolset()
-
         request: GenerationRequestSimplify = replace(
             self.template_request_simplify,
             increment_messages=[message_builder.build()],
             messages=original_context.get_messages(),
             message_data=event,
-            tool_json=round_toolset,
         )
 
         response = await self._request_model_with_fallback_private_(
@@ -1392,21 +1080,25 @@ class PrivateChat(ChatBasics):
             uid=uid,
         )
 
-        response, actions = await self._validate_decision_with_retry(
-            response=response,
-            request=request,
-            message_builder=message_builder,
-            resend=lambda req: self._request_model_with_fallback_private_(
-                request=req, event=event, prompt=prompt, uid=uid
-            ),
-            uid=uid,
-            valid_decisions=self.decision_function.keys(),
-        )
-
         self.log.info(f"[{uid}]私聊模型返回json_list:\n{''.join(response.reply_text)}")
 
-        for action in actions:
-            await self.decision_function[action["decision"]](action, event)
+        for response_json in (extract_json_from_text(s) for s in response.reply_text if s != ""):
+            if isinstance(response_json, dict):
+                for action in response_json.get("actions", []):
+                    action: dict[str, str | int]
+                    if decision := action.get("decision"):
+                        if decision == "speak":
+                            await self._private_speak_conduct(action, event)
+                        elif decision == "update":
+                            await self.update_conduct(action, event)
+                        elif decision == "silence":
+                            await self.silence_conduct(action, event)
+                        else:
+                            self.log.error(f"[{uid}]无效decision:{action}")
+                    else:
+                        self.log.error(f"[{uid}]返回json错误:{action}")
+            else:
+                self.log.error(f"[{uid}]返回json解析不正确:{type(response_json)}")
 
         original_context.add_user_message(f"{prompt}\n{event.llm_formatted_message}")
         original_context.extend(
@@ -1475,13 +1167,6 @@ class PrivateChat(ChatBasics):
             including_audios,
             including_videos,
         )
-        if deferred_prompt := self.tool_calls.get_deferred_tools_prompt("group_chat"):
-            message_builder.add_text_left(deferred_prompt+self.skills.prompt)#待发现工具的提示词
-        else:
-            message_builder.add_text_left(
-                self.skills.prompt#skills的提示词
-            )
-        
         message_builder.add_text(
             f"<current_user_info>{await self.user_system.get_user_info(user_id)}</current_user_info>"
         )

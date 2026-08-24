@@ -418,26 +418,32 @@ class GroupChat(ChatBasics):
             else:
                 self.log.error(f"[{uid}]返回json错误:{response_json}")
         
-        for response_json in (extract_json_from_text(s) for s in response.reply_text if s != ""):
-            
+        parsed_actions: List[Dict] = []
+        unparsed_texts: List[str] = []
+
+        for response_json in (
+            extract_json_from_text(s) for s in response.reply_text if s != ""
+        ):
             if isinstance(response_json, dict):
-                
                 if response_list := response_json.get("actions"):
-                
-                    for response_json in response_list:
-                        
-                        await execute_response_json(response_json)
-                        
+                    parsed_actions.extend(response_list)
                 else:
-                    await execute_response_json(response_json)
-                    
+                    parsed_actions.append(response_json)
             else:
-                self.log.error(f"返回json解析不正确:{type(response_json)}")
-                await event.send_client.send_group_merge_text(
-                    group_id = group_id,
-                    message = f"{response_json}",
-                    source = "模型返回无法解析的格式",
-                )
+                # 记录无法解析的分段(通常是模型在json前后输出的闲聊文本),先不发送
+                self.log.error(f"[{uid}]返回json解析不正确:{type(response_json)}")
+                unparsed_texts.append(f"{response_json}")
+
+        for response_json in parsed_actions:
+            await execute_response_json(response_json)
+
+        if not parsed_actions and unparsed_texts:
+            # 整轮没有任何分段解析成功才兜底发送原文,避免混合输出时把闲聊文本发进群
+            await event.send_client.send_group_merge_text(
+                group_id = group_id,
+                message = "\n".join(unparsed_texts),
+                source = "模型返回无法解析的格式",
+            )
         
         #存储更新等,因为直接返回的是那个对象所以可以直接改变,虽然中途会有其他协程拿到这个对象改变数值但是不应堵塞其他携程的聊天
         original_context.add_user_message(f"{prompt}\n最新用户消息:{event.llm_formatted_message}")
@@ -550,27 +556,29 @@ class GroupChat(ChatBasics):
         )
 
         self.log.info(f"[{uid}]模型返回json_list:\n{"".join(response.reply_text)}")
-        
-        for response_json in (extract_json_from_text(s) for s in response.reply_text if s != ""):
-            
+
+        parsed_actions: List[Dict] = []
+        unparsed_texts: List[str] = []
+
+        for response_json in (
+            extract_json_from_text(s) for s in response.reply_text if s != ""
+        ):
             if isinstance(response_json, dict):
-                
-                for response_json in response_json.get("actions",[]):
-                    
-                    response_json:dict[str,str|int]
-                    if decision := response_json.get("decision"):
-                        
-                        if fun := self.decision_function.get(decision):
-                            
-                            await fun(response_json, event)
-                            
-                        else:
-                            self.log.error(f"[{uid}]无效decision:{response_json}")
-                        
-                    else:
-                        self.log.error(f"[{uid}]返回json错误:{response_json}")
+                parsed_actions.extend(response_json.get("actions", []))
             else:
-                self.log.error(f"返回json解析不正确:{type(response_json)}")
+                # 记录无法解析的分段(通常是模型在json前后输出的闲聊文本),先不发送
+                self.log.error(f"[{uid}]返回json解析不正确:{type(response_json)}")
+                unparsed_texts.append(f"{response_json}")
+
+        for response_json in parsed_actions:
+            response_json: dict[str, str | int]
+            if decision := response_json.get("decision"):
+                if fun := self.decision_function.get(decision):
+                    await fun(response_json, event)
+                else:
+                    self.log.error(f"[{uid}]无效decision:{response_json}")
+            else:
+                self.log.error(f"[{uid}]返回json错误:{response_json}")
 
         original_context.add_user_message(prompt)
         original_context.extend(
@@ -1082,23 +1090,31 @@ class PrivateChat(ChatBasics):
 
         self.log.info(f"[{uid}]私聊模型返回json_list:\n{''.join(response.reply_text)}")
 
-        for response_json in (extract_json_from_text(s) for s in response.reply_text if s != ""):
+        parsed_actions: List[Dict] = []
+        unparsed_texts: List[str] = []
+
+        for response_json in (
+            extract_json_from_text(s) for s in response.reply_text if s != ""
+        ):
             if isinstance(response_json, dict):
-                for action in response_json.get("actions", []):
-                    action: dict[str, str | int]
-                    if decision := action.get("decision"):
-                        if decision == "speak":
-                            await self._private_speak_conduct(action, event)
-                        elif decision == "update":
-                            await self.update_conduct(action, event)
-                        elif decision == "silence":
-                            await self.silence_conduct(action, event)
-                        else:
-                            self.log.error(f"[{uid}]无效decision:{action}")
-                    else:
-                        self.log.error(f"[{uid}]返回json错误:{action}")
+                parsed_actions.extend(response_json.get("actions", []))
             else:
                 self.log.error(f"[{uid}]返回json解析不正确:{type(response_json)}")
+                unparsed_texts.append(f"{response_json}")
+
+        for action in parsed_actions:
+            action: dict[str, str | int]
+            if decision := action.get("decision"):
+                if decision == "speak":
+                    await self._private_speak_conduct(action, event)
+                elif decision == "update":
+                    await self.update_conduct(action, event)
+                elif decision == "silence":
+                    await self.silence_conduct(action, event)
+                else:
+                    self.log.error(f"[{uid}]无效decision:{action}")
+            else:
+                self.log.error(f"[{uid}]返回json错误:{action}")
 
         original_context.add_user_message(f"{prompt}\n{event.llm_formatted_message}")
         original_context.extend(

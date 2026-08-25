@@ -1,37 +1,29 @@
 # db/Dockerfile
 FROM postgres:18
 
-# 1. 先切到 HTTP 协议装好 ca-certificates（HTTPS 源需要证书，鸡生蛋问题）
+# Setup Aliyun mirror and install build dependencies
 RUN sed -i 's|https://|http://|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
-    sed -i 's|https://|http://|g' /etc/apt/sources.list
-# 2. 替换为阿里云源（官方源不稳定，避免 502）
-RUN sed -i 's|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g; s|http://security.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
-    sed -i 's|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g; s|http://security.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list
-
-RUN apt-get update && apt-get install -y --fix-missing \
+    sed -i 's|https://|http://|g' /etc/apt/sources.list && \
+    sed -i 's|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g; s|http://security.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g; s|http://security.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     gnupg \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN install -d /usr/share/postgresql-common/pgdg && \
-    curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
-
-RUN . /etc/os-release && \
-    sh -c "echo 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main' > /etc/apt/sources.list.d/pgdg.list"
-
-RUN . /etc/os-release && \
-    curl -fsSL https://packages.groonga.org/debian/groonga-archive-keyring.gpg \
-    | gpg --dearmor -o /usr/share/keyrings/groonga-archive-keyring.gpg && \
-    sh -c "echo 'deb [signed-by=/usr/share/keyrings/groonga-archive-keyring.gpg] https://packages.groonga.org/debian/ ${VERSION_CODENAME} main' > /etc/apt/sources.list.d/groonga.list"
-
-RUN apt-get update && apt-get install -y --fix-missing \
     git \
     make \
     gcc \
-    postgresql-server-dev-18 \
+    postgresql-server-dev-18 && \
+    install -d /usr/share/postgresql-common/pgdg && \
+    curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc && \
+    . /etc/os-release && \
+    sh -c "echo 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main' > /etc/apt/sources.list.d/pgdg.list" && \
+    curl -fsSL https://packages.groonga.org/debian/groonga-archive-keyring.gpg | \
+    gpg --dearmor -o /usr/share/keyrings/groonga-archive-keyring.gpg && \
+    sh -c "echo 'deb [signed-by=/usr/share/keyrings/groonga-archive-keyring.gpg] https://packages.groonga.org/debian/ ${VERSION_CODENAME} main' > /etc/apt/sources.list.d/groonga.list" && \
+    apt-get update && apt-get install -y --no-install-recommends \
     postgresql-18-pgdg-pgroonga \
-    postgresql-18-pgvector \
-    && apt-get remove -y git make gcc postgresql-server-dev-18 curl ca-certificates gnupg \
-    && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/*
+    postgresql-18-pgvector && \
+    apt-get remove -y git make gcc postgresql-server-dev-18 curl ca-certificates gnupg && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*

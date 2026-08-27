@@ -716,6 +716,7 @@ class GroupChat(ChatBasics):
             including_audios=including_audios,
             including_videos=including_videos,
             send_client=event.send_client,
+            exclude_message_id=event.event.message_id,
         )
         
         if deferred_prompt := self.tool_calls.get_deferred_tools_prompt("group_chat"):

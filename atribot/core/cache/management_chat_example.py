@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import datetime
 from logging import Logger
 from typing import TYPE_CHECKING, Any, Dict, List
@@ -8,7 +9,6 @@ from atribot.common_utils import (
     AUDIO_EXTENSIONS,
     refresh_image_download_url,
     url_to_audio_mp3,
-    url_to_image_jpeg,
     url_to_video_mp4,
 )
 from atribot.core.atri_config import atriConfig
@@ -38,7 +38,7 @@ from atribot.LLMchat.memory.memory_system import MemorySystem
 
 # 多模态历史消息默认保留数量
 DEFAULT_INCLUDING_PICTURES = 2
-DEFAULT_INCLUDING_AUDIOS = 1
+DEFAULT_INCLUDING_AUDIOS = 5
 DEFAULT_INCLUDING_VIDEOS = 1
 
 if TYPE_CHECKING:
@@ -126,11 +126,12 @@ class ChatManager(ServiceBase):
         self._load_character_settings()
         
         self._mw_instance: PipelineMiddleware | None = None
-        self._listener_fn = None
+        self._bg_tasks: set[asyncio.Task[None]] = set()
+        """后台记忆总结任务集合"""
         self._pm: PlatformManager | None = None
 
     async def initialize(self) -> None:
-        """初始化：注册上下文加载中间件和消息存储监听器"""
+        """初始化：注册上下文加载中间件(挂载上下文+追加消息+后台总结)"""
         pm = container.get_by_type(PlatformManager)
         self._pm = pm
 
@@ -142,32 +143,25 @@ class ChatManager(ServiceBase):
         self._mw_instance = _ContextLoader()
         await pm.pipeline.add_middleware(self._mw_instance)
 
-        class _StoreRule(Rule):
-            rule_type = "always"
-            async def match(self_, msg: atriMessageEvent) -> bool:
-                return isinstance(msg.event, (
-                    GroupMessageEvent, PrivateMessageEvent, MessageSentEvent,
-                ))
-
-        self._listener_fn = self._store_message_context
-        pm.event_bus.on(
-            PostType.MESSAGE, 
-            rule=_StoreRule(),
-            priority = 60
-        )(self._store_message_context)
-
     async def cleanup(self) -> None:
-        """清理：注销上下文处理器"""
-        if self._pm is not None:
-            if self._mw_instance is not None:
-                await self._pm.pipeline.remove_middleware("context_loader")
-                self._mw_instance = None
-            if self._listener_fn is not None:
-                self._pm.event_bus.remove_listener(self._listener_fn)
-                self._listener_fn = None
+        """清理：注销上下文处理器,取消后台总结任务"""
+        if self._pm is not None and self._mw_instance is not None:
+            await self._pm.pipeline.remove_middleware("context_loader")
+            self._mw_instance = None
+
+        for task in self._bg_tasks:
+            task.cancel()
+        if self._bg_tasks:
+            await asyncio.gather(*self._bg_tasks, return_exceptions=True)
+            self._bg_tasks.clear()
 
     async def _context_loader(self, msg: atriMessageEvent) -> atriMessageEvent | None:
-        """加载上下文,更新时间窗口"""
+        """Pipeline 中间件主体:挂载上下文并立即追加消息记录
+
+        追加必须发生在 EventBus 分发之前:
+        on_chat 触发 LLM 回复后会置 stop_propagation 中断后续监听器,
+        若 append 放在低优先级监听器里,触发回复的消息会从群历史中永久消失。
+        """
         ev = msg.event
         group_id = msg.group_id
 
@@ -179,40 +173,66 @@ class ChatManager(ServiceBase):
             ctx = await self.get_private_context(ev.user_id)
             ctx.time_window.add()
             msg._extra["private_context"] = ctx
-        
-        return msg
-
-    async def _store_message_context(self, msg: atriMessageEvent) -> None:
-        """EventBus 监听器：存储消息到上下文,触发记忆总结,丢弃消息"""
+        else:
+            return msg
 
         result = await self.add_message_record(msg)
-        if result is None:
-            return
-        
-        messages_str, context_obj = result
-        group_id = msg.group_id
-        memory_system = container.get_by_type(MemorySystem)
+        if result is not None:
+            self._spawn_summarize_task(result, msg)
 
-        if group_id is not None:
-            context_obj:GroupContext
-            async with context_obj.summarizing() as ctx:
-                if ctx is not None:
-                    self.logger.info("开始总结群 %d 消息", group_id)
+        return msg
+
+    def _spawn_summarize_task(
+        self,
+        result: tuple[str, GroupContext | PrivateContext],
+        msg: atriMessageEvent,
+    ) -> None:
+        """为达到阈值的消息批量启动后台记忆总结(不阻塞消息流)"""
+        messages_str, context_obj = result
+        task = asyncio.create_task(
+            self._summarize_messages(messages_str, context_obj, msg)
+        )
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+
+    async def _summarize_messages(
+        self,
+        messages_str: str,
+        context_obj: GroupContext | PrivateContext,
+        msg: atriMessageEvent,
+    ) -> None:
+        """后台执行记忆提取总结
+
+        经由 summarizing() 上下文锁防止同一上下文并发总结;
+        抛出的异常仅记录日志,不影响消息主流程
+        """
+        memory_system = container.get_by_type(MemorySystem)
+        try:
+            if isinstance(context_obj, GroupContext):
+                async with context_obj.summarizing() as ctx:
+                    if ctx is None:
+                        return
+                    self.logger.info("开始总结群 %d 消息", context_obj.group_id)
                     await memory_system.extract_stored_group_message_advanced(
                         messages_str=messages_str,
                         bot_id=msg.event.self_id,
-                        group_id=group_id,
+                        group_id=context_obj.group_id,
                     )
-        else:
-            context_obj:PrivateContext
-            async with context_obj.summarizing() as ctx:
-                if ctx is not None:
+            else:
+                context_obj: PrivateContext
+                async with context_obj.summarizing() as ctx:
+                    if ctx is None:
+                        return
                     self.logger.info("开始总结私聊 %d 消息", context_obj.user_id)
                     msgs = [{"role": "user", "content": messages_str}]
                     await memory_system.extract_stored_message(
                         messages=msgs,
                         user_id=context_obj.user_id,
                     )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self.logger.exception("后台记忆总结出错: %s", e)
 
     async def groom_context_storage(self):
         """整理上下文存储：归档不活跃项目"""
@@ -359,6 +379,7 @@ class ChatManager(ServiceBase):
         group_id: int, 
         builder: MessageBuilder,
         *,
+        exclude_message_id: int | None = None,
         including_pictures: bool = False,
         including_audios: bool = False,
         including_videos: bool = False,
@@ -385,6 +406,10 @@ class ChatManager(ServiceBase):
         """
 
         messages = list((await self.get_group_context(group_id)).messages)
+        if exclude_message_id is not None:
+            # 当前消息已由 append_message_segments_prompt 以"最新用户消息"形式呈现在末尾,
+            # 从历史快照中剔除避免双重呈现
+            messages = [m for m in messages if m.message_id != exclude_message_id]
 
         remaining_pictures = DEFAULT_INCLUDING_PICTURES if including_pictures else 0
         remaining_audios = DEFAULT_INCLUDING_AUDIOS if including_audios else 0
@@ -416,12 +441,8 @@ class ChatManager(ServiceBase):
                             send_client,
                             self.logger,
                         )
-                        image_data = (
-                            await url_to_image_jpeg(new_url, file_name=segment.file_name)
-                            if new_url else None
-                        )
-                        if image_data:
-                            builder.add_image_base64_left(image_data.data, image_data.mime)
+                        if new_url:
+                            builder.add_image_left(new_url)
                         elif segment.text_description or segment.summary:
                             desc = segment.text_description or segment.summary
                             builder.add_text_left(
@@ -446,7 +467,7 @@ class ChatManager(ServiceBase):
                             )
                             if new_url:
                                 try:
-                                    desc = await self.media_processor.image_to_text(new_url, segment.file_name)
+                                    desc = await self.media_processor.image_to_text(new_url)
                                 except Exception:
                                     desc = "<描述获取失败>"
                             else:
@@ -468,7 +489,7 @@ class ChatManager(ServiceBase):
                         else:
                             if not segment.text_description:
                                 try:
-                                    desc = await self.media_processor.audio_to_text(audio_url, segment.file_name)
+                                    desc = await self.media_processor.audio_to_text(audio_url)
                                     segment.text_description = desc
                                 except Exception:
                                     segment.text_description = "<描述获取失败>"
@@ -535,8 +556,7 @@ class ChatManager(ServiceBase):
                                     if not audio_segment.text_description:
                                         try:
                                             audio_segment.text_description = await self.media_processor.audio_to_text(
-                                                audio_segment.url or audio_segment.file.file,
-                                                audio_segment.file_name,
+                                                audio_segment.url or audio_segment.file.file
                                             )
                                         except Exception:
                                             audio_segment.text_description = "<描述获取失败>"
@@ -545,8 +565,9 @@ class ChatManager(ServiceBase):
                                     )
                             else:
                                 # 超配额音频降级为 CQ 文本标记,不调用 MediaProcessor
+                                # 措辞注意:仅说明该历史消息未附音频块,不暗示听不到
                                 builder.add_text_left(
-                                    f"[CQ:file,file={segment.file_name or 'unknown'},summary:音频文件(未嵌入)]"
+                                    f"[CQ:file,file={segment.file_name or 'unknown'},summary:历史音频文件(因数量限制未附音频块,如需内容可让用户重发)]"
                                 )
                         else:
                             builder.add_text_left(segment.__str__())

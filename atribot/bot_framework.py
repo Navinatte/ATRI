@@ -24,6 +24,7 @@ from atribot.core.platform.manager import PlatformManager
 from atribot.core.service_container import container
 from atribot.core.time_trigger import TimeTriggerSupervisor
 from atribot.core.type.bot_types import MessageEventEnvelope, atriMessageEvent
+from atribot.core.type.onebot_event_types import PrivateMessageEvent
 from atribot.LLMchat.chat import GroupChat, PrivateChat
 from atribot.LLMchat.emoji_system import EmojiCore
 from atribot.LLMchat.initiative_chat import initiativeChat
@@ -169,6 +170,8 @@ class BotFramework:
         log = self.log
         _initiative_chat = initiativeChat()
         cmd_system = container.get_by_type(CommandSystem)
+        _permissions = container.get_by_type(PermissionsManagement)
+        _private_chat = container.get_by_type(PrivateChat)
 
         @bus.on_message(rule=AtCommandRule(), priority=10)
         async def on_at_command(event:MessageEventEnvelope):
@@ -185,6 +188,18 @@ class BotFramework:
             try:
                 if group_context := event._extra.get("group_context"):
                     event.stop_propagation = await _initiative_chat.decision(event, group_context)
+                elif private_ctx := event._extra.get("private_context"):
+                    # 私聊直通 PrivateChat.step(不做主动性决策):
+                    # 仅处理真正的私聊消息(排除自身发送回执),黑名单用户直接忽略
+                    if (
+                        isinstance(event.event, PrivateMessageEvent)
+                        and event.user_id not in _permissions.blacklist
+                    ):
+                        await _private_chat.step(
+                            event,
+                            "你正在和用户进行一对一私聊，请认真回复对方的消息",
+                        )
+                        event.stop_propagation = True
             except Exception as e:
                 log.exception("聊天处理失败: %s", e)
                 await event.send(event.reply_text(f"有关聊天的路由出现了问题:\n{e}\n你不应该看到这个的,因为最近在迁移方面的原因，有很多小毛病,看到这建议联系开发者"))

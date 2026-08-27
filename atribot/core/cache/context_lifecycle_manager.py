@@ -39,7 +39,7 @@ class ContextLifecycleManager:
             management_context_dict (dict[int,ContextContainer]): 管理上下文的字典
             is_user_context (bool): 是否是user上下文,
         """
-        current_time = time.monotonic()
+        current_time = time.time()
         keys_to_remove: list[int] = []
 
         for key, container_data in list(management_context_dict.items()):
@@ -60,7 +60,7 @@ class ContextLifecycleManager:
                     success = await self.save_group_context(target_id, messages, total_tokens, play_role)
                 
                 if success:
-                    if time.monotonic() - container_data.last_msg_at > self.archival_after:
+                    if time.time() - container_data.last_msg_at > self.archival_after:
                         keys_to_remove.append(key)
                         self.log.info(f"上下文归档成功: {'User' if is_user_context else 'Group'} {target_id}")
                     else:

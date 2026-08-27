@@ -355,8 +355,8 @@ class PrivateContext:
     """消息列表"""
     async_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     """异步锁"""
-    last_msg_at: float = field(default=time.monotonic(), init=False)
-    """最后一次消息的使用时间"""
+    last_msg_at: float = field(default=time.time(), init=False)
+    """最后一次消息的使用时间(统一 wall-clock,归档判定用 monotonic 会永久失效)"""
     time_window: TimeWindow = field(init=False)
     """统计近期消息数量的窗口对象"""
     IS_SUMMARIZING: bool = field(default=False, init=False)

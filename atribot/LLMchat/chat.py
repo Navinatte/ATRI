@@ -196,11 +196,15 @@ class ChatBasics(ABC):
         """为当前用户输入附加结构化的消息片段"""
         segments = event.event.segments
         Segment = segments[0] if segments else None
+        # 群身份 role(owner/admin/member)仅群消息 sender 携带,私聊 sender 无此字段;
+        # nickname 个别实现可能缺失,回退为 QQ 号避免 KeyError 炸断整条处理链
+        group_role = event.event.sender.get("role")
+        nickname = event.event.sender.get("nickname") or str(event.user_id)
         message_builder.add_text(
             f"最新用户消息:\n<MESSAGE>"
             f"<user_id>{event.user_id}</user_id>"
-            f"<nick_name>{event.event.sender['nickname']}</nick_name>"
-            f"<group_role>{event.event.sender['role']}</group_role>"
+            f"<nick_name>{nickname}</nick_name>"
+            f"<group_role>{group_role or 'friend'}</group_role>"
             f"<time>{time.strftime('%Y-%m-%d %H:%M:%S')}</time>\n"
             f"<message_id>{event.event.message_id}</message_id>"
             "<user_message>"
@@ -321,6 +325,19 @@ class ChatBasics(ABC):
                 message_builder.add_text("<引用消息段>[引用消息解析失败]</引用消息段>")
 
         if quote_message:
+            # 首先声明被引用者身份,让模型能区分引用的是谁的消息(而不是猜成发送者自己)
+            quoted_ev = quote_message.event
+            quoted_sender = quoted_ev.sender if hasattr(quoted_ev, "sender") else {}
+            quoted_uid = getattr(quoted_ev, "user_id", None)
+            quoted_nick = quoted_sender.get("nickname") or (str(quoted_uid) if quoted_uid else "未知")
+            quoted_role = quoted_sender.get("role")
+            quoted_time = quoted_ev._fmt_time() if hasattr(quoted_ev, "_fmt_time") else ""
+            message_builder.add_text(
+                f"被引用消息 发送者:<user_id>{quoted_uid}</user_id>"
+                f"<nick_name>{quoted_nick}</nick_name>"
+                f"<group_role>{quoted_role or 'friend'}</group_role>"
+                f"<time>{quoted_time}</time>\n"
+            )
             await append_segments(quote_message.event.segments)
             message_builder.add_text("</引用消息段>")
             await append_segments(event.event.segments[1:])
@@ -330,7 +347,7 @@ class ChatBasics(ABC):
         message_builder.add_text("</user_message></MESSAGE>")
 
         if (
-            len(event.event.pure_text) >= 5
+            len(event.event.pure_text) >= 2
             and (memory := [
                 (
                     f"user:{r[0]}",
@@ -340,7 +357,7 @@ class ChatBasics(ABC):
                     f"可信度:{r[3]}",
                 )
                 for r in await self.memory_system.query_user_recently_memory(
-                    user=event.user_id,
+                    user_id=event.user_id,
                     text=event.event.pure_text,
                     limit=10,
                 )
@@ -895,6 +912,19 @@ class GroupChat(ChatBasics):
                 message_builder.add_text("<引用消息段>")
         
         if quote_message:
+            # 首先声明被引用者身份,让模型能区分引用的是谁的消息(而不是猜成发送者自己)
+            quoted_ev = quote_message.event
+            quoted_sender = quoted_ev.sender if hasattr(quoted_ev, "sender") else {}
+            quoted_uid = getattr(quoted_ev, "user_id", None)
+            quoted_nick = quoted_sender.get("nickname") or (str(quoted_uid) if quoted_uid else "未知")
+            quoted_role = quoted_sender.get("role")
+            quoted_time = quoted_ev._fmt_time() if hasattr(quoted_ev, "_fmt_time") else ""
+            message_builder.add_text(
+                f"被引用消息 发送者:<user_id>{quoted_uid}</user_id>"
+                f"<nick_name>{quoted_nick}</nick_name>"
+                f"<group_role>{quoted_role or 'friend'}</group_role>"
+                f"<time>{quoted_time}</time>\n"
+            )
             await append_segments(quote_message.event.segments)
             
             message_builder.add_text("</引用消息段>")
@@ -1186,7 +1216,9 @@ class PrivateChat(ChatBasics):
 
         for response_json in (extract_json_from_text(s) for s in response.reply_text if s != ""):
             if isinstance(response_json, dict):
-                for action in response_json.get("actions", []):
+                # 兼容 actions 包装与裸 decision 两种输出形态(与群聊版对齐)
+                actions = response_json.get("actions") or [response_json]
+                for action in actions:
                     action: dict[str, str | int]
                     if decision := action.get("decision"):
                         if decision == "speak":
@@ -1269,7 +1301,7 @@ class PrivateChat(ChatBasics):
             including_audios,
             including_videos,
         )
-        if deferred_prompt := self.tool_calls.get_deferred_tools_prompt("group_chat"):
+        if deferred_prompt := self.tool_calls.get_deferred_tools_prompt("private_chat"):
             message_builder.add_text_left(deferred_prompt+self.skills.prompt)#待发现工具的提示词
         else:
             message_builder.add_text_left(
@@ -1283,10 +1315,7 @@ class PrivateChat(ChatBasics):
             self.build_prompt.decision_whether_private_responses(
                 user_id=user_id,
                 prompt=prompt,
-                else_prompt=(
-                    self.emoji_core.prompt
-                    + self.skills.prompt
-                ),
+                else_prompt=self.emoji_core.prompt,#表情包提示词(skills.prompt已在左侧注入,避免双重)
             )
         )
         return message_builder
@@ -1298,6 +1327,7 @@ class PrivateChat(ChatBasics):
             chat_text_list=response_json.get("content", []),
             user_id=event.user_id,
             send_client=event.send_client,
+            reply_message_id=response_json.get("reply_message_id"),
         )
 
     async def send_reply_message_separator(
@@ -1305,11 +1335,25 @@ class PrivateChat(ChatBasics):
         chat_text_list: List[str],
         user_id: int,
         send_client:SendClientBase = None,
+        reply_message_id: int | None = None,
     ) -> None:
-        """发送私聊文本消息，支持表情标签"""
+        """发送私聊文本消息，支持表情标签与引用回复"""
 
         if not chat_text_list:
             return
+
+        # 引用回复:首段消息拼 reply 段后发送(与群聊 send_group_reply_msg 语义对齐)
+        if reply_message_id is not None:
+            await send_client.send_private_msg(
+                user_id=user_id,
+                message=[
+                    {"type": "reply", "data": {"id": reply_message_id}},
+                    {"type": "text", "data": {"text": chat_text_list[0]}},
+                ],
+            )
+            chat_text_list = list(chat_text_list[1:])
+            if not chat_text_list:
+                return
 
         if (
             len(chat_text_list) <= MAX_SINGLE_MESSAGE_LENGTH

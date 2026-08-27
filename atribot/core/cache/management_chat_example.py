@@ -144,7 +144,7 @@ class ChatManager(ServiceBase):
         await pm.pipeline.add_middleware(self._mw_instance)
 
     async def cleanup(self) -> None:
-        """清理：注销上下文处理器,取消后台总结任务"""
+        """清理：注销上下文处理器,取消后台总结任务,关停前尽力落盘"""
         if self._pm is not None and self._mw_instance is not None:
             await self._pm.pipeline.remove_middleware("context_loader")
             self._mw_instance = None
@@ -154,6 +154,14 @@ class ChatManager(ServiceBase):
         if self._bg_tasks:
             await asyncio.gather(*self._bg_tasks, return_exceptions=True)
             self._bg_tasks.clear()
+
+        # 关停前强制落盘:定时备份周期(480s)内的增量在此持久化,
+        # 避免短命调试进程的对话上下文丢失。
+        # 容器按注册逆序清理,ChatManager 先于 database 清理,此时 DB 池仍可用
+        try:
+            await asyncio.shield(self.context_storage())
+        except Exception as e:
+            self.logger.exception("关停落盘失败(上下文已尽力保存): %s", e)
 
     async def _context_loader(self, msg: atriMessageEvent) -> atriMessageEvent | None:
         """Pipeline 中间件主体:挂载上下文并立即追加消息记录
@@ -165,20 +173,32 @@ class ChatManager(ServiceBase):
         ev = msg.event
         group_id = msg.group_id
 
-        if group_id is not None:
-            ctx = await self.get_group_context(group_id)
-            ctx.time_window.add()
-            msg._extra["group_context"] = ctx
-        elif isinstance(ev, PrivateMessageEvent):
-            ctx = await self.get_private_context(ev.user_id)
-            ctx.time_window.add()
-            msg._extra["private_context"] = ctx
-        else:
+        # 仅消息类事件才挂载并计入时间窗(群/私聊消息与自身发送回执);
+        # 通知类事件(戳一戳/贴表情等)虽携带 group_id 但无 segments,
+        # 混入群历史会在快照构建时炸出 AttributeError,
+        # 且计入 time_window 会污染 initiativeChat 的活跃度判断
+        if not isinstance(ev, (GroupMessageEvent, PrivateMessageEvent, MessageSentEvent)):
             return msg
 
-        result = await self.add_message_record(msg)
-        if result is not None:
-            self._spawn_summarize_task(result, msg)
+        try:
+            if group_id is not None:
+                ctx = await self.get_group_context(group_id)
+                ctx.time_window.add()
+                msg._extra["group_context"] = ctx
+            elif isinstance(ev, PrivateMessageEvent):
+                ctx = await self.get_private_context(ev.user_id)
+                ctx.time_window.add()
+                msg._extra["private_context"] = ctx
+            else:
+                return msg
+
+            result = await self.add_message_record(msg)
+            if result is not None:
+                self._spawn_summarize_task(result, msg)
+        except Exception:
+            # 上下文挂载是增强能力,失败不应阻断消息流:
+            # 继续放行消息,后续监听器(store_message_to_db 等)仍可正常入库
+            self.logger.exception("上下文加载/记录失败,消息将继续传递: %r", msg)
 
         return msg
 

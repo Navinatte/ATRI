@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 from atribot.core.service_container import container
 
-MAX_FILE_BYTES = 50 * 1024 * 1024
+MAX_FILE_BYTES = 100 * 1024 * 1024
 """单文件缓存体积上限(字节)，超过不写入缓存"""
 
 MAX_FILES = 20

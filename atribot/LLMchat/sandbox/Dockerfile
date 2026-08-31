@@ -6,11 +6,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
-# 仅安装运行时必需的系统库（opencv-headless 的轻量依赖）
-# 跳过 ffmpeg/tmux/curl/wget/fonts 等非核心包以规避 Docker bridge 不走 VPN 的问题
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 安装运行时必需的系统库 + 中文字体 + ffmpeg
+RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
+    sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list 2>/dev/null || true; \
+    apt-get update && apt-get install -y --no-install-recommends -o Acquire::Retries=5 \
     libglib2.0-0 \
     libgomp1 \
+    fontconfig \
+    fonts-wqy-zenhei \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace

@@ -66,6 +66,8 @@ RUN apt-get update && apt-get install -y --fix-missing --no-install-recommends \
 - `tmux / curl / wget`：终端复用与网络工具
 - 结尾 `rm -rf /var/lib/apt/lists/*` 清理 apt 缓存，减小镜像体积
 
+> 当前实际 Dockerfile（`atribot/LLMchat/sandbox/Dockerfile`）为了规避 Docker bridge 不走 VPN 的网络问题，只保留了 `libglib2.0-0`、`libgomp1`、`fontconfig`、`fonts-wqy-zenhei`（中文字体仍保留），tmux/curl/wget 未安装。如需恢复，自行在 `RUN apt-get install` 中加回即可。
+
 ```dockerfile
 WORKDIR /workspace
 ```

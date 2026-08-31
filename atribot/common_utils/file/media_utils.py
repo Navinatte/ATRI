@@ -16,8 +16,8 @@ from atribot.common_utils.file.media_cache import (
 )
 from atribot.core.type.chat_message_types import File
 
-AUDIO_MAX_BYTES = 10 * 1024 * 1024   # 10MB
-VIDEO_MAX_BYTES = 50 * 1024 * 1024   # 50MB
+AUDIO_MAX_BYTES = 10 * 1024 * 1024     # 10MB
+VIDEO_MAX_BYTES = 100 * 1024 * 1024   # 100MB
 AUDIO_BITRATE = "128k"               # 音频统一转码码率
 VIDEO_CRF = 28                       # 视频统一转码质量(CRF, 越小越清晰)
 VIDEO_AUDIO_BITRATE = "128k"         # 视频中音轨码率
@@ -108,7 +108,7 @@ async def url_to_video_base64(
     Args:
         source: 视频来源，可以是 File 对象或字符串(http/https/file/base64 或本地路径)
         file_name: 可选文件名，用于推断 MIME 类型
-        max_bytes: 最大允许下载的字节数，默认 50MB
+        max_bytes: 最大允许下载的字节数，默认 100MB
 
     Returns:
         ``(base64_data, mime_type)`` 元组：
@@ -370,7 +370,7 @@ async def url_to_video_mp4(
     Args:
         source: 视频来源(http/https/file/base64 或本地路径)
         file_name: 可选文件名，用于推断格式
-        max_bytes: 最大允许下载字节数，默认 50MB
+        max_bytes: 最大允许下载字节数，默认 100MB
         crf: 转码质量参数
         max_dimension: 限制视频最长边像素,None 不缩放
 

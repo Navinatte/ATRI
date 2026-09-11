@@ -25,8 +25,14 @@ tool_json = {
     }
 }
 
-async def main(text: str, message_data: atriMessageEvent, emotion: str = "高兴", speed: float = 0.9) -> str:
+async def main(text: str, message_data: atriMessageEvent, emotion: str = "高兴", speed: float = 1.0) -> str:
     """发送语音消息"""
+    # 防御式修复: speed可能以字符串形式传入(如"1.0"),统一转为float,与tool_json默认值1.0对齐
+    try:
+        speed = float(speed)
+    except (TypeError, ValueError):
+        raise ValueError(f"语速必须是数字,当前值: {speed!r}")
+
     audio_path = await tts_main.get_tts_path(
         text = text,
         emotion = emotion,

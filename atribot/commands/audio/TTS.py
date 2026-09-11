@@ -76,7 +76,17 @@ class TTSService:
             Path: 返回wav文件的绝对路径
         """
         # raise ValueError("语音因为资源分配问题暂时被关了,不要再尝试使用")
-        
+
+        # 防御式修复: LLM在部分路径(如私聊)可能把speed输出成字符串"1.0"而非数字,
+        # 导致 _validate_parameters 中 0.9 <= speed <= 1.2 触发
+        # '<=' not supported between instances of 'float' and 'str'
+        if isinstance(speed, str):
+            speed = speed.strip()
+        try:
+            speed = float(speed)
+        except (TypeError, ValueError):
+            raise ValueError(f"语速必须是数字,当前值: {speed!r}")
+
         self._validate_parameters(text, emotion, speed)
         
         payload = self._build_payload(text, emotion, speed)

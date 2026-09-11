@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from atribot.core.command.async_permissions_management import PermissionsManagement
 from atribot.core.event_bus.rule import Rule, UserRule
+from atribot.core.service_container import container
 from atribot.core.type.bot_types import MessageEventEnvelope, NoticeEnvelope
 from atribot.core.type.onebot_event_types import GroupMsgEmojiLikeEvent
 from atribot.plugins.plugin import Plugin
@@ -47,8 +49,12 @@ class EmojiLikePlugin(Plugin):
 
     @Plugin.on_notice(rule=EmojiLikeNoticeRule(), priority=0)
     async def on_emoji_like(self, event: NoticeEnvelope) -> None:
-        """镜像回贴同样的表情"""
+        """镜像回贴同样的表情（黑名单用户贴的表情不跟随）"""
         ev: GroupMsgEmojiLikeEvent = event.event
+
+        permissions = container.get_by_type(PermissionsManagement)
+        if not permissions.check_access(ev.user_id):
+            return
 
         for like in ev.likes:
             emoji_id = like.get("emoji_id")

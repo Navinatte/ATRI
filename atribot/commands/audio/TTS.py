@@ -20,35 +20,38 @@ class TTSService:
     def __init__(self):
         if not self._initialized:
             self.audio_count = 1
-            # GPT-SoVITS v2 FastAPI 端点（api_v2.py），直接读服务器本地路径
-            self.api_url = "http://100.126.134.61:9880/tts"
+            # GPT-SoVITS v2 FastAPI 端点（api_v2.py），本地运行，直接读本地路径
+            # 启动命令: runtime\python.exe api_v2.py -a 0.0.0.0 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml
+            self.api_url = "http://127.0.0.1:9880/tts"
+
+            # GPT-SoVITS 本地根目录（参考音频均位于其下）
+            self.gsv_root = "C:/resources/TTS/GPT-SoVITS-v4-20250419"
 
             # 主参考音频（固定使用这一条，所有请求统一）
-            # 注意：api_v2 直接读取服务器（zt）上的文件，故使用 zt 本地路径
-            self.main_ref_audio_path = "C:/resources/GPT-SoVITS-v4-20250419/参考音频/いえ、見えてましたよ。みなさんがいるの。わたし、目がいいので.wav"
+            self.main_ref_audio_path = f"{self.gsv_root}/参考音频/いえ、見えてましたよ。みなさんがいるの。わたし、目がいいので.wav"
             self.main_ref_prompt_text = "いえ、見えてましたよ。みなさんがいるの。わたし、目がいいので"
             self.main_ref_prompt_lang = "ja"
 
             # 辅助参考音频（固定三个，多参考音色融合，实测听感最佳）
             self.aux_ref_audio_paths = [
-                "C:/resources/GPT-SoVITS-v4-20250419/参考音频/わたしが夏生さんのために行動するのに、理由が必要でしょうか.wav",
-                "C:/resources/GPT-SoVITS-v4-20250419/参考音频/そうでした。時間もありませんし、そちらを優先します.wav",
-                "C:/resources/GPT-SoVITS-v4-20250419/参考音频/…どうしてしまったのでしょう、わたしは.wav",
+                f"{self.gsv_root}/参考音频/わたしが夏生さんのために行動するのに、理由が必要でしょうか.wav",
+                f"{self.gsv_root}/参考音频/そうでした。時間もありませんし、そちらを優先します.wav",
+                f"{self.gsv_root}/参考音频/…どうしてしまったのでしょう、わたしは.wav",
             ]
 
             self.emotion_list = {
                 "高兴": {
-                    "refer_wav_path": "C:/resources/GPT-SoVITS-v4-20250419/参考音频/いえ、見えてましたよ。みなさんがいるの。わたし、目がいいので.wav",
-                    "prompt_text": "いえ、見えてましたよ。みなさんがいるの。わたし、目がいいので",
+                    "refer_wav_path": self.main_ref_audio_path,
+                    "prompt_text": self.main_ref_prompt_text,
                     "prompt_language": "ja"
                 },
                 "机械": {
-                    "refer_wav_path": "C:/resources/GPT-SoVITS-v4-20250419/参考音频/間違いありません。知性の欠片も感じない、ジャ力ジャ力とうるさいだけの音楽です.wav",
+                    "refer_wav_path": f"{self.gsv_root}/参考音频/間違いありません。知性の欠片も感じない、ジャ力ジャ力とうるさいだけの音楽です.wav",
                     "prompt_text": "間違いありません。知性の欠片も感じない、ジャ力ジャ力とうるさいだけの音楽です",
                     "prompt_language": "ja"
-                },            
+                },
                 "平静": {
-                    "refer_wav_path": "C:/resources/GPT-SoVITS-v4-20250419/参考音频/間違いありません。知性の欠片も感じない、ジャ力ジャ力とうるさいだけの音楽です.wav",
+                    "refer_wav_path": f"{self.gsv_root}/参考音频/間違いありません。知性の欠片も感じない、ジャ力ジャ力とうるさいだけの音楽です.wav",
                     "prompt_text": "間違いありません。知性の欠片も感じない、ジャ力ジャ力とうるさいだけの音楽です",
                     "prompt_language": "ja"
                 }
@@ -95,8 +98,7 @@ class TTSService:
         """构建TTS请求的负载（GPT-SoVITS api_v2 /tts 接口格式）
 
         每次请求固定使用：主参考音频 + 三个辅助参考音频（音色融合听感最佳）
-        参考音频路径为服务器（zt）本地路径，api_v2 直接读取
-        参数对齐 zt 上复现脚本验证成功的组合
+        参考音频路径为本机绝对路径，api_v2 直接读取
         """
         return {
             "text": text,

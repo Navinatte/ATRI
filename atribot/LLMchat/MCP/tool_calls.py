@@ -528,8 +528,13 @@ class ToolSchemaCache:
                 return {"anyOf": [convert_schema(s) for s in schema["anyOf"]]}
 
             result: dict[str, Any] = {}
-            if "type" in schema and schema["type"] in supported_types:
-                result["type"] = schema["type"]
+            # JSON Schema 允许 type 为列表（如 ["string", "null"] 表示可空），归一化为单个类型
+            raw_type = schema.get("type")
+            if isinstance(raw_type, list):
+                non_null = [t for t in raw_type if t != "null"]
+                raw_type = non_null[0] if non_null else "null"
+            if raw_type in supported_types:
+                result["type"] = raw_type
                 if "format" in schema and schema["format"] in supported_formats.get(
                     result["type"], set()
                 ):

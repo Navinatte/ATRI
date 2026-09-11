@@ -498,7 +498,12 @@ class ChatManager(ServiceBase):
                 elif isinstance(segment, RecordSegment):
                     if remaining_audios > 0:
                         audio_url = segment.url or segment.file.file
-                        result = await url_to_audio_mp3(audio_url, segment.file_name)
+                        # url_to_audio_mp3 下载失败会抛异常(如 CDN rkey 过期返回 400)，捕获后降级为文本
+                        try:
+                            result = await url_to_audio_mp3(audio_url, segment.file_name)
+                        except Exception as error:
+                            self.logger.warning(f"音频下载/转码失败，降级为文本: {segment.file_name or 'unknown'}, 原因: {error}")
+                            result = None
                         if result is not None:
                             builder.add_audio_left(result.data, result.fmt)
                             remaining_audios -= 1
@@ -526,7 +531,12 @@ class ChatManager(ServiceBase):
                 elif isinstance(segment, VideoSegment):
                     if remaining_videos > 0:
                         video_url = segment.url or segment.file.file
-                        result = await url_to_video_mp4(video_url, segment.file_name)
+                        # url_to_video_mp4 下载失败会抛异常(如 CDN rkey 过期返回 400)，捕获后降级为文本
+                        try:
+                            result = await url_to_video_mp4(video_url, segment.file_name)
+                        except Exception as error:
+                            self.logger.warning(f"视频下载/转码失败，降级为文本: {segment.file_name or 'unknown'}, 原因: {error}")
+                            result = None
                         if result is not None:
                             builder.add_video_base64_left(result.data, result.mime)
                         else:

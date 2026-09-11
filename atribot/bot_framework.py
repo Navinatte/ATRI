@@ -103,6 +103,8 @@ class BotFramework:
         """标记是否已经完成关闭"""
         self._platform_manager: PlatformManager | None = None
         """平台管理器实例"""
+        self._docker_fallback_path: Path | None = None
+        """docker 不在 PATH 时的回退完整路径"""
 
     @classmethod
     async def create(cls):
@@ -114,6 +116,33 @@ class BotFramework:
             await self.graceful_shutdown()
             raise
         return self
+
+    async def _resolve_docker_cmd(self) -> bool:
+        """检查 docker 是否可用；PATH 中不可用时回退到常见安装位置
+
+        Returns:
+            bool: PATH 中直接可用返回 True；否则尝试记录回退路径并返回 False。
+        """
+        try:
+            probe = await asyncio.create_subprocess_exec(
+                "docker", "--version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await probe.communicate()
+            if probe.returncode == 0:
+                return True
+        except (FileNotFoundError, OSError):
+            pass
+
+        for candidate in (
+            Path(r"C:\Program Files\Docker\Docker\resources\bin\docker.exe"),
+            Path(os.path.expandvars(r"%LOCALAPPDATA%\Docker\resources\bin\docker.exe")),
+        ):
+            if candidate.exists():
+                self._docker_fallback_path = candidate
+                break
+        return False
 
     async def initialize(self):
         """初始化"""
@@ -299,13 +328,13 @@ class BotFramework:
             self.log.exception("后台任务异常退出: %s", task.get_name(), exc_info=exc)
 
     async def _backup_database(self) -> None:
-        """异步备份 atri 数据库到 D:\\资源\\ATRI\\
+        """异步备份 atri 数据库到项目根目录下的 backup\\ 目录
 
         使用 pg_dump 自定义压缩格式，文件名格式：ATRI-backup-YYYY-MM-DD-HH-MM-SS.dump
         作为后台任务运行，不会阻塞 bot 启动流程。
         """
         try:
-            backup_dir = Path("D:/资源/ATRI")
+            backup_dir = self.config.file_path.project_root / "backup"
             backup_dir.mkdir(parents=True, exist_ok=True)
 
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
@@ -320,11 +349,16 @@ class BotFramework:
             env = os.environ.copy()
             env["PGPASSWORD"] = db_cfg.password
 
+            # docker 不在 PATH 时（如 VS Code 主进程早于 Docker 安装启动），回退到常见安装位置
+            docker_cmd = "docker"
+            if not await self._resolve_docker_cmd():
+                docker_cmd = str(self._docker_fallback_path) if self._docker_fallback_path else "docker"
+
             use_docker_exec = False
             try:
                 # 检查容器是否存在且在运行
                 check = await asyncio.create_subprocess_exec(
-                    "docker", "ps", "--format", "{{.Names}}",
+                    docker_cmd, "ps", "--format", "{{.Names}}",
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
@@ -337,7 +371,7 @@ class BotFramework:
             if use_docker_exec:
                 # 在容器内执行 pg_dump（无需本机安装 PostgreSQL 工具）
                 process = await asyncio.create_subprocess_exec(
-                    "docker", "exec", container_name, "pg_dump",
+                    docker_cmd, "exec", container_name, "pg_dump",
                     "-h", "127.0.0.1",
                     "-p", "5432",
                     "-U", str(db_cfg.user),
@@ -353,7 +387,7 @@ class BotFramework:
                 if process.returncode == 0:
                     # 从容器复制回 Windows 备份目录
                     cp = await asyncio.create_subprocess_exec(
-                        "docker", "cp", f"{container_name}:/tmp/atri_backup.dump", str(filepath),
+                        docker_cmd, "cp", f"{container_name}:/tmp/atri_backup.dump", str(filepath),
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
                     )

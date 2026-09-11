@@ -137,7 +137,7 @@ class MCPClient:
             MCPTool(
                 name=tool.name,
                 description=tool.description or "",
-                parameters=tool.input_schema,
+                parameters=tool.inputSchema,
                 mcp_tool=tool,
                 mcp_client=self,
                 mcp_server_name=self.name or "",

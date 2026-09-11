@@ -327,6 +327,8 @@ class WebSocketClientConfig:
     """访问令牌"""
     url: str = ""
     """WS client 目标地址 (host:port)"""
+    file_http_url: str | None = None
+    """文件/语音发送用的 HTTP 端点（NapCat HTTP 服务地址），为空时用 OneBotSendClient 默认值"""
     source_name: str = ""
     """来源标识（为空时自动取平台条目 key"""
     enabled: bool = True
@@ -356,6 +358,8 @@ class WebSocketServerConfig:
     """WS server 监听地址"""
     port: int = 8080
     """WS server 监听端口"""
+    file_http_url: str | None = None
+    """文件/语音发送用的 HTTP 端点（NapCat HTTP 服务地址），为空时用 OneBotSendClient 默认值"""
     source_name: str = ""
     """来源标识（为空时自动取平台条目 key"""
     enabled: bool = True
@@ -388,6 +392,8 @@ class HttpAdapterConfig:
     """HTTP 监听地址"""
     port: int = 8080
     """HTTP 监听端口"""
+    file_http_url: str | None = None
+    """文件/语音发送用的 HTTP 端点（NapCat HTTP 服务地址），为空时用 OneBotSendClient 默认值"""
     source_name: str = ""
     """来源标识（为空时自动取平台条目 key"""
     enabled: bool = True
@@ -437,6 +443,7 @@ class PlatformsConfig:
                     adapter=raw.get("adapter", ""),
                     access_token=raw.get("access_token"),
                     url=raw.get("url") or "127.0.0.1:8080",
+                    file_http_url=raw.get("file_http_url"),
                     source_name=source_name,
                     enabled=raw.get("enabled", True),
                 )
@@ -446,6 +453,7 @@ class PlatformsConfig:
                     access_token=raw.get("access_token"),
                     host=raw.get("host", "127.0.0.1"),
                     port=raw.get("port", 8080),
+                    file_http_url=raw.get("file_http_url"),
                     source_name=source_name,
                     enabled=raw.get("enabled", True),
                 )
@@ -456,6 +464,7 @@ class PlatformsConfig:
                     url=raw.get("url"),
                     host=raw.get("host", "127.0.0.1"),
                     port=raw.get("port", 8080),
+                    file_http_url=raw.get("file_http_url"),
                     source_name=source_name,
                     enabled=raw.get("enabled", True),
                 )
@@ -504,7 +513,7 @@ class atriConfig:
         if not config_file.is_absolute():
             config_file = (project_root / config_file).resolve()
 
-        with open(config_file, "r", encoding="utf-8") as file_handler:
+        with open(config_file, "r", encoding="utf-8-sig") as file_handler:
             config_data: Dict[str, Any] = json.load(file_handler)
 
         self._raw_config: Dict[str, Any] = config_data

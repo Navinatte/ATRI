@@ -76,10 +76,10 @@ class DockerSandbox(SandBoxBase):
                 print(f"Pulling image {self.image}...")
                 await asyncio.to_thread(self.client.images.pull, self.image)
 
-            # 构建卷挂载：将 Windows D 盘以只读方式挂入容器 /mnt/d
-            volumes = {
-                "D:/": {"bind": "/mnt/d", "mode": "ro"},
-            }
+            # 构建卷挂载：若宿主机存在 D 盘，则以只读方式挂入容器 /mnt/d（盘符不存在的机器上跳过）
+            volumes = {}
+            if os.path.exists("D:/"):
+                volumes["D:/"] = {"bind": "/mnt/d", "mode": "ro"}
             if extra_volumes := self.config.get("volumes"):
                 volumes.update(extra_volumes)
 

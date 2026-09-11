@@ -66,6 +66,7 @@ class OneBotAdapter(PlatformAdapter):
         self._send_client = OneBotSendClient(
             access_token=config.access_token or "",
             http_base_url=http_base_url,
+            file_http_url=config.file_http_url or "http://127.0.0.1:3000",
             connection_type=config.connection_type,
             ws_connection=self._connection,
             log=self._log.getChild("Send"),

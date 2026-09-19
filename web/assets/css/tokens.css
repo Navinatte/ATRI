@@ -1,0 +1,151 @@
+:root{
+  --sea-950:#070d18; --sea-900:#0a1223; --sea-850:#0d1b33;
+  --sea-800:#142f5c; --sea-700:#223a68; --sea-600:#1f4d8a;
+  --sea-500:#2664ab; --sea-400:#3f7cc0; --sea-300:#5a8dc3;
+  --sea-200:#8fb4d6; --sea-100:#cfe0ef;
+
+  --sky-400:#96d0fd; --sky-200:#d3eafd;
+
+  --atri-700:#055579; --atri-500:#397f9d;
+
+  --ribbon-600:#871c30; --ribbon-500:#b64a59;
+
+  --spark-core:#fbe4cf; --spark-glow:#e8b98f; --spark-ember:#be939b;
+  --foam:#f9f9fa; --sail:#fcfaf3; --brass:#b08e61;
+
+  --mascot-dress:#546b77; --mascot-flax:#decec2;
+  --mascot-line:#010101; --mascot-ribbon:#ce6f7d;
+  --r-mascot:32px;
+  --mascot-line-on-dark:rgba(222,206,194,.30);
+  --mascot-bg:rgba(84,107,119,.14);
+
+  --bg-base:#0a1223;
+  --bg-panel:rgba(20,47,92,.62);
+  --bg-panel-alt:rgba(13,27,51,.84);
+  --bg-code:#070d18;
+  --fg-code:#fcfaf3;
+
+  --fg:#fcfaf3;
+  --fg-muted:rgba(252,250,243,.68);
+  --fg-faint:rgba(252,250,243,.60);
+  --fg-onlight:#0a1223;
+
+  --accent:#70b5d5;
+  --accent-deep:var(--atri-500);
+  --accent-warm:#fbe4cf;
+  --accent-alert:var(--ribbon-500);
+
+  --line-color:rgba(252,250,243,.14);
+  --line-color-strong:rgba(252,250,243,.30);
+  --line-color-accent:rgba(112,181,213,.45);
+  --line-faint:rgba(252,250,243,.07);
+  --wash:rgba(252,250,243,.06);
+  --wash-accent:rgba(112,181,213,.14);
+
+  --sea-bg:linear-gradient(180deg,
+    #070d18 0%, #0d1b33 30%, #223a68 58%, #142f5c 78%, #0a1223 100%);
+  --sea-glow:radial-gradient(112% 42% at 50% 52%, #31507d 0%, transparent 66%);
+  --sea-glow-a:.16;
+  --vig-a:rgba(7,13,24,.30);
+  --vig-b:rgba(7,13,24,.46);
+  --nav-solid:rgba(10,18,35,.72);
+  --stars-a:.5;
+
+  --sea-photo-scrim:rgba(10,18,35,.84);
+  --sea-photo:url("../img/ATRI-bot-nightsea-bg.webp");
+
+  --veil-night:#142f5c;
+  --veil-day:#d3eafd;
+  --veil-a:0;
+
+  --font-cjk:"Source Han Sans SC","Noto Sans SC","PingFang SC",
+             "HarmonyOS Sans SC","Microsoft YaHei",sans-serif;
+  --font-display:"JiangCheng Yuan","江城圆体",var(--font-cjk);
+  --font-sans:var(--font-display);
+  --font-jp:"Yu Mincho","Hiragino Mincho ProN","Source Han Serif JP","Noto Serif JP",serif;
+  --font-mono:ui-monospace,"JetBrains Mono","Cascadia Mono",Consolas,
+              "SFMono-Regular","Noto Sans Mono",monospace,var(--font-cjk);
+
+  --fs-hero:clamp(44px,6.2vw,96px);
+  --fs-h1:clamp(30px,4.2vw,50px);
+  --fs-h2:clamp(22px,2.6vw,32px);
+  --fs-h3:19px;
+  --fs-body:16px; --fs-sm:14px; --fs-xs:12.5px;
+  --fs-label:12px; --fs-code:13.5px;
+
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
+  --space-5:24px; --space-6:32px; --space-7:48px; --space-8:64px;
+  --space-9:96px; --space-10:128px;
+  --maxw:1120px; --maxw-wide:1320px;
+  --gutter:clamp(20px,2.6vw,48px);
+  --sec-py:clamp(72px,10vh,132px);
+  --grid-gap:24px;
+
+  --r-0:0; --r-1:2px; --r-2:4px; --r-pill:999px; --cut:18px;
+  --cut-path:polygon(18px 0,100% 0,100% calc(100% - 18px),
+                     calc(100% - 18px) 100%,0 100%,0 18px);
+
+  --glow-cold:0 0 0 1px rgba(90,141,195,.28),0 18px 48px -26px rgba(38,100,171,.60);
+  --glow-warm:0 0 26px rgba(251,228,207,.24);
+  --shadow-deep:0 24px 64px -34px rgba(4,10,22,.92);
+
+  --z-sea:1; --z-veil:2; --z-content:10; --z-nav:100;
+
+  --ease-sea:cubic-bezier(.22,.61,.30,1);
+  --ease-quiet:cubic-bezier(.33,1,.68,1);
+  --dur-1:120ms; --dur-2:240ms; --dur-3:480ms; --dur-4:900ms; --dur-idle:18s;
+  --dur-nav-out:240ms; --dur-nav-in:420ms;
+  --dur-nav-vt:520ms;
+  --dur-nav-fade:300ms;
+  --shift-nav:clamp(40px,9vw,150px);
+
+  color-scheme:dark;
+}
+
+html[data-polarity="day"]{
+  --bg-base:#d3eafd;
+  --bg-panel:rgba(255,255,255,.62);
+  --bg-panel-alt:rgba(252,254,255,.84);
+  --bg-code:#0b2c47;
+
+  --fg:#0e3557;
+  --fg-muted:#24486b;
+  --fg-faint:#25455a;
+  --fg-onlight:#0e3557;
+
+  --accent:#0b4a7d;
+  --accent-deep:#0f5aa8;
+  --accent-warm:#7a4712;
+
+  --line-color:rgba(14,53,87,.16);
+  --line-color-strong:rgba(14,53,87,.30);
+  --line-color-accent:rgba(11,74,125,.50);
+  --line-faint:rgba(14,53,87,.09);
+  --wash:rgba(14,53,87,.05);
+  --wash-accent:rgba(11,74,125,.10);
+
+  --sea-bg:linear-gradient(180deg,
+    #96d0fd 0%, #b7defc 30%, #cbe8fd 58%, #a8d8fb 78%, #d3eafd 100%);
+  --sea-glow:radial-gradient(112% 42% at 50% 52%, #dff2fa 0%, transparent 66%);
+  --sea-glow-a:.5;
+  --vig-a:rgba(14,53,87,.06);
+  --vig-b:rgba(14,53,87,.14);
+  --nav-solid:rgba(236,245,254,.82);
+  --stars-a:0;
+
+  --glow-cold:0 0 0 1px rgba(11,74,125,.16),0 18px 48px -26px rgba(11,74,125,.22);
+  --glow-warm:0 0 26px rgba(122,71,18,.14);
+  --shadow-deep:0 24px 64px -34px rgba(14,53,87,.22);
+
+  --mascot-line-on-dark:rgba(14,53,87,.34);
+  --mascot-bg:rgba(84,107,119,.12);
+
+  --sea-photo-scrim:rgba(211,234,253,.88);
+  --sea-photo:url("../img/ATRI-bot-daysea-bg.webp");
+
+  color-scheme:light;
+}
+
+@media (max-width:899px){
+  :root{--fs-hero:clamp(46px,9vw,118px)}
+}

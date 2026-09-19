@@ -1,0 +1,2532 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ATRI-bot · 视觉设计规范 演示 v0.7</title>
+<script>
+/* ============================================================
+   昼与夜引擎（《视觉设计规范.md》§3.8）
+   两个锚点（夜 / 昼）+ 极性阶跃。晨昏是插值出来的，没有实测锚点。
+   放在 <head> 里是为了在首帧之前就写好变量，避免"先闪一下夜晚"。
+   生产版应外置为 web/assets/js/daycycle.js。
+
+   实测来源：web/avatar - reference/ 下的夜海图与白天图（见 §1.3）
+   ============================================================ */
+(function(){
+'use strict';
+
+/* ── 四个锚点（§3.8.3）──────────────────────────────
+   NIGHT / DAY 是从参考图上量出来的；DAWN / DUSK 是推导的。
+   推导的规矩只有一条：**只改色相，不提亮。**
+   每一层的 OKLCH L 直接继承「夜 ↔ 昼」基线在该时刻的取值，只把色相转到暖侧。
+   因为 OKLab 的 L 就是感知明度，同 L 换色相几乎不改变相对亮度，
+   所以 §3.8 验证过的可读性保证不会被“加暖色”这件事动到。 */
+var NIGHT = {
+  label:'夜晚', star:.55,
+  skyTop:'#070d18', skyMid:'#0d1b33', skyHorizon:'#223a68',
+  seaNear:'#142f5c', seaDeep:'#0a1223',
+  glow:'#31507d', light:'#fbe4cf'
+};
+var DAY = {
+  label:'白天', star:0,
+  /* 铺底用的是天空。采样到的海色 #1878d8 / #0f5aa8 在白天不能铺底
+     —— 深字踩上去只有 2.83:1（§3.8.1）。它只作强调色出现在色卡里。 */
+  skyTop:'#96d0fd', skyMid:'#b7defc', skyHorizon:'#cbe8fd',
+  seaNear:'#a8d8fb', seaDeep:'#d3eafd',
+  glow:'#dff2fa', light:'#edeffc'
+};
+/* 拂晓 —— 紫罗兰天顶，地平线出一道锈橙，天光还压在底下 */
+var DAWN = {
+  label:'拂晓', star:.18,
+  skyTop:'#242c4d', skyMid:'#44375a', skyHorizon:'#9b3801',
+  seaNear:'#733f35', seaDeep:'#2c3a4e',
+  glow:'#a95601', light:'#ffe4cf'
+};
+/* 日出 —— 地平线转成珊瑚橘，光层变成金黄的晨光 */
+var RISE = {
+  label:'日出', star:.02,
+  skyTop:'#737ea4', skyMid:'#9588af', skyHorizon:'#f37f50',
+  seaNear:'#be8377', seaDeep:'#8595ad',
+  glow:'#fb964b', light:'#ffe9d7'
+};
+/* 日落 —— 洋红的天，橘红的地平线 */
+var SET = {
+  label:'日落', star:.02,
+  skyTop:'#657398', skyMid:'#9377a5', skyHorizon:'#f16a57',
+  seaNear:'#b97673', seaDeep:'#7588a2',
+  glow:'#ff7f5c', light:'#fee8de'
+};
+/* 暮色 —— 紫罗兰重新压下来，地平线只剩一抹余灬 */
+var DUSK = {
+  label:'暮色', star:.26,
+  skyTop:'#101a38', skyMid:'#381f46', skyHorizon:'#900700',
+  seaNear:'#652a2a', seaDeep:'#15253a',
+  glow:'#a72d01', light:'#ffe3d7'
+};
+
+var ANCHORS = [
+  { h: 0.00, c: NIGHT },
+  { h: 5.00, c: NIGHT },
+  { h: 5.75, c: DAWN  },
+  { h: 6.50, c: RISE  },
+  { h: 7.50, c: DAY   },
+  { h:17.00, c: DAY   },
+  { h:18.10, c: SET   },
+  { h:19.00, c: DUSK  },
+  { h:19.50, c: NIGHT },
+  { h:24.00, c: NIGHT }
+];
+
+/* 对比度模型。白字取 --fg #fcfaf3（Y=0.955）、深字取白天的 --fg #0e3557（Y=0.0324） */
+var YW = 0.955, YD = 0.0324, NEED = 4.5;
+/* 白字跌破 4.5:1 的明度 · 深字跌破 4.5:1 的明度 */
+var DEAD = {
+  lo: Math.cbrt((YW + 0.05) / NEED - 0.05),
+  hi: Math.cbrt(NEED * (YD + 0.05) - 0.05)
+};
+/* 两条曲线的交点：那一刻两边一样差，极性在这里换最不突傅 */
+var L_X = Math.cbrt(Math.sqrt((YW + 0.05) * (YD + 0.05)) - 0.05);
+
+/* SUNRISE / SUNSET / MOMENTS 都在下面由环境层解出 */
+var SUNRISE = 6, SUNSET = 18, MOMENTS = [];
+
+var CKEYS = ['skyTop','skyMid','skyHorizon','seaNear','seaDeep','glow','light'];
+var TVAR = {
+  skyTop:'--t-sky-top', skyMid:'--t-sky-mid', skyHorizon:'--t-sky-horizon',
+  seaNear:'--t-sea-near', seaDeep:'--t-sea-deep',
+  glow:'--t-glow', light:'--t-light'
+};
+
+/* ---------- sRGB <-> OKLab / OKLCH ---------- */
+function h2r(h){ h=h.replace('#',''); return [parseInt(h.substr(0,2),16)/255,
+  parseInt(h.substr(2,2),16)/255, parseInt(h.substr(4,2),16)/255]; }
+function r2h(c){
+  function f(v){ v=v<0?0:(v>1?1:v); var n=Math.round(v*255);
+    return (n<16?'0':'')+n.toString(16); }
+  return '#'+f(c[0])+f(c[1])+f(c[2]);
+}
+function s2l(c){ return c<=0.04045 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4); }
+function l2s(c){ return c<=0.0031308 ? c*12.92 : 1.055*Math.pow(c, 1/2.4)-0.055; }
+function lin2ok(r,g,b){
+  var l=0.4122214708*r+0.5363325363*g+0.0514459929*b;
+  var m=0.2119034982*r+0.6806995451*g+0.1073969566*b;
+  var s=0.0883024619*r+0.2817188376*g+0.6299787005*b;
+  var l_=Math.cbrt(l), m_=Math.cbrt(m), s_=Math.cbrt(s);
+  return [0.2104542553*l_+0.7936177850*m_-0.0040720468*s_,
+          1.9779984951*l_-2.4285922050*m_+0.4505937099*s_,
+          0.0259040371*l_+0.7827717662*m_-0.8086757660*s_];
+}
+function ok2lin(L,A,B){
+  var l_=L+0.3963377774*A+0.2158037573*B,
+      m_=L-0.1055613458*A-0.0638541728*B,
+      s_=L-0.0894841775*A-1.2914855480*B;
+  var l=l_*l_*l_, m=m_*m_*m_, s=s_*s_*s_;
+  return [ 4.0767416621*l-3.3077115913*m+0.2309699292*s,
+          -1.2684380046*l+2.6097574011*m-0.3413193965*s,
+          -0.0041960863*l-0.7034186147*m+1.7076147010*s];
+}
+function hex2ok(h){ var c=h2r(h); return lin2ok(s2l(c[0]), s2l(c[1]), s2l(c[2])); }
+function ok2hex(o){ var c=ok2lin(o[0],o[1],o[2]); return r2h([l2s(c[0]), l2s(c[1]), l2s(c[2])]); }
+function hex2lch(h){
+  var o=hex2ok(h), C=Math.sqrt(o[1]*o[1]+o[2]*o[2]);
+  var H=Math.atan2(o[2],o[1])*180/Math.PI; if(H<0) H+=360;
+  return [o[0],C,H];
+}
+function lch2hex(L,C,H){
+  var r=H*Math.PI/180;
+  return ok2hex([L, C*Math.cos(r), C*Math.sin(r)]);
+}
+
+/* 混合：近中性色走直角坐标，其余走极坐标（§3.8.5 的那个例外） */
+var NEUTRAL_C = 0.05;
+function mixCol(a, b, t){
+  var A=hex2lch(a), B=hex2lch(b);
+  if (Math.min(A[1], B[1]) < NEUTRAL_C) {
+    var oa=hex2ok(a), ob=hex2ok(b);
+    return ok2hex([oa[0]+(ob[0]-oa[0])*t, oa[1]+(ob[1]-oa[1])*t, oa[2]+(ob[2]-oa[2])*t]);
+  }
+  var dH=((B[2]-A[2]+180)%360+360)%360-180;
+  return lch2hex(A[0]+(B[0]-A[0])*t, A[1]+(B[1]-A[1])*t, (A[2]+dH*t+360)%360);
+}
+
+/* ---------- 环境层：按锚点插值（§3.8.5） ---------- */
+function ambientAt(h){
+  h = ((h % 24) + 24) % 24;
+  for (var i=0; i<ANCHORS.length-1; i++){
+    var p=ANCHORS[i], q=ANCHORS[i+1];
+    if (h >= p.h && h <= q.h){
+      var t = (q.h===p.h) ? 0 : (h-p.h)/(q.h-p.h);
+      t = t*t*(3-2*t);                       /* smoothstep */
+      var o = { h:h, t:t };
+      o.star = p.c.star + (q.c.star-p.c.star)*t;
+      for (var k=0; k<CKEYS.length; k++){
+        var key=CKEYS[k];
+        o[key] = mixCol(p.c[key], q.c[key], t);
+      }
+      return o;
+    }
+  }
+  var f = { h:h, star:NIGHT.star };
+  for (var j=0; j<CKEYS.length; j++) f[CKEYS[j]] = NIGHT[CKEYS[j]];
+  return f;
+}
+
+/* ---------- 由环境层解出极性翻转时刻（§3.8.4）----------
+   页面顶边的文字直接压在最暗的 skyTop 上，所以用它的明度做判据。
+   翻转点取“白字曲线”与“深字曲线”的交点。 */
+function ambL(h){ return hex2lch(ambientAt(h).skyTop)[0]; }
+
+function findL(target, a, b, rising){
+  for (var i=0; i<42; i++){
+    var m = (a + b) / 2;
+    if (rising ? (ambL(m) < target) : (ambL(m) > target)) a = m; else b = m;
+  }
+  return (a + b) / 2;
+}
+
+SUNRISE = findL(L_X, 4.5, 9.5, true);
+SUNSET  = findL(L_X, 15.0, 20.5, false);
+
+MOMENTS = [
+  { h: 0.0,     label:'深夜' },
+  { h: 5.0,     label:'夜'   },
+  { h: 5.75,    label:'拂晓' },
+  { h: 6.50,    label:'日出' },
+  { h: SUNRISE, label:'日出翻转', flip:true },
+  { h: 12.0,    label:'正午' },
+  { h: SUNSET,  label:'日落翻转', flip:true },
+  { h: 18.10,   label:'日落' },
+  { h: 19.00,   label:'暮色' },
+  { h: 21.0,    label:'夜'   }
+];
+
+/* ---------- 极性：阶跃，不是插值（§3.8.4） ---------- */
+function polarityAt(h){
+  h = ((h % 24) + 24) % 24;
+  return (h >= SUNRISE && h < SUNSET) ? 'day' : 'night';
+}
+
+/* 日光强度：由光层的相对亮度推出，白天强、夜里弱 */
+function lumOf(hex){
+  var c=h2r(hex);
+  return 0.2126*s2l(c[0]) + 0.7152*s2l(c[1]) + 0.0722*s2l(c[2]);
+}
+
+/* ---------- 遮罩：厚度由对比度需求反解（§3.8.4）----------
+   这是全篇最要紧的一段。死区之内没有任何一种文字色能达标，
+   所以唯有把环境层本身往当前极性的底色上拉。
+   厚度不写死常数，而是解出「刚好让四个令牌全部达标」的最小值 ——
+   于是它不该有的时候就是零，需要多厚就有多厚。 */
+
+/* 两套极性的文字令牌（与 CSS 保持一致） */
+var TEXT_TOKENS = {
+  night: [['#fcfaf3',1], ['#fcfaf3',.68], ['#fcfaf3',.60], ['#70b5d5',1]],
+  day:   [['#0e3557',1], ['#24486b',1], ['#35566b',1], ['#0b4a7d',1]]
+};
+/* 遮罩颜色 = 当前极性的页面底色。取底色而非纯白，是为了让交接
+   看起来像「起雾」，而不是「闪一下白光」。 */
+var SCRIM_COLOR = { night:'#142f5c', day:'#d3eafd' };
+var BARE_LAYERS = ['skyTop','skyMid','skyHorizon','seaNear','seaDeep'];
+
+function over(fg, bg, a){
+  if (a >= 1) return fg;
+  if (a <= 0) return bg;
+  var f=h2r(fg), b=h2r(bg), o=[0,0,0];
+  for (var i=0;i<3;i++) o[i] = f[i]*a + b[i]*(1-a);
+  return r2h(o);
+}
+function contrast(fg, bg){
+  var a=lumOf(fg), b=lumOf(bg);
+  return (Math.max(a,b)+0.05) / (Math.min(a,b)+0.05);
+}
+
+/* 当前极性下最差的令牌对比度，并报出是哪个令牌压在哪一层上。
+   层级顺序不能弄错 —— 真实页面是：环境层 → 地平线辉光 → 整页遮罩 → 文字。 */
+function worstDetail(st, pol, a){
+  var ga = Math.min(.55, Math.max(.06, lumOf(st.glow) * 1.05));
+  var toks = TEXT_TOKENS[pol], names = ['fg','muted','faint','accent'], sc = SCRIM_COLOR[pol];
+  var worst = 99, token = '', layer = '';
+  for (var i=0;i<toks.length;i++){
+    var col = toks[i][0], al = toks[i][1];
+    for (var j=0;j<BARE_LAYERS.length;j++){
+      var base = over(st.glow, st[BARE_LAYERS[j]], ga);
+      if (a > 0) base = over(sc, base, a);
+      /* 半透明文字：先与底合成再比 */
+      var c = contrast(al < 1 ? over(col, base, al) : col, base);
+      if (c < worst){ worst = c; token = names[i]; layer = BARE_LAYERS[j]; }
+    }
+  }
+  return { c: worst, token: token, layer: layer };
+}
+
+function worstContrast(st, pol, a){ return worstDetail(st, pol, a).c; }
+
+function scrimNeeded(st, pol){
+  if (worstContrast(st, pol, 0) >= NEED) return 0;   /* 常态：完全不加遮罩 */
+  var lo = 0, hi = 1;
+  for (var i=0; i<20; i++){
+    var m = (lo + hi) / 2;
+    if (worstContrast(st, pol, m) >= NEED) hi = m; else lo = m;
+  }
+  return hi;
+}
+
+function stateAt(h){
+  var a = ambientAt(h);
+  a.polarity = polarityAt(h);
+  a.L = hex2lch(a.skyTop)[0];
+  a.glowA = Math.min(.55, Math.max(.06, lumOf(a.glow) * 1.05));
+  a.scrim = scrimNeeded(a, a.polarity);
+  a.label = a.polarity === 'day' ? DAY.label : NIGHT.label;
+  return a;
+}
+
+/* ---------- 写入 CSS ---------- */
+var root = document.documentElement;
+var cur = null;
+
+function apply(p, instant){
+  for (var k in TVAR) root.style.setProperty(TVAR[k], p[k]);
+  root.style.setProperty('--t-star', p.star.toFixed(3));
+  root.style.setProperty('--t-glow-a', p.glowA.toFixed(3));
+  root.style.setProperty('--t-scrim-a', p.scrim.toFixed(3));
+  root.setAttribute('data-polarity', p.polarity);
+  cur = p;
+  if (instant){
+    root.classList.add('tt-off');
+    /* 下一帧再放开，让这次写入不参与过渡 */
+    requestAnimationFrame(function(){ root.classList.remove('tt-off'); });
+  }
+}
+
+/* ---------- 时间源 ---------- */
+var forced = null;
+try {
+  var m = /[?&]hour=([0-9]*\.?[0-9]+)/.exec(location.search);
+  if (m) { var v = parseFloat(m[1]); if (!isNaN(v)) forced = v; }
+} catch(e){}
+
+function nowHours(){
+  var d = new Date();
+  return d.getHours() + d.getMinutes()/60 + d.getSeconds()/3600;
+}
+function hour(){ return forced !== null ? forced : nowHours(); }
+function setForced(v){ forced = (v===null||v===undefined||isNaN(v)) ? null : v; }
+function setInstant(v){ forced = v; apply(stateAt(v), true); }
+
+/* 首帧 */
+apply(stateAt(hour()), true);
+
+/* 每 20 秒重算；@property 的 20s 过渡负责把它变得连续 */
+window.__atriTime = {
+  ANCHORS: ANCHORS, NIGHT: NIGHT, DAY: DAY, DAWN: DAWN, RISE: RISE, SET: SET, DUSK: DUSK,
+  MOMENTS: MOMENTS, VARS: TVAR,
+  DEAD: DEAD, L_X: L_X, SWITCH: { rise:SUNRISE, set:SUNSET }, NEED: NEED,
+  TEXT_TOKENS: TEXT_TOKENS, SCRIM_COLOR: SCRIM_COLOR, LAYERS: BARE_LAYERS,
+  stateAt: stateAt, ambientAt: ambientAt, ambL: ambL, polarityAt: polarityAt,
+  worstContrast: worstContrast, worstDetail: worstDetail,
+  over: over, contrast: contrast,
+  apply: apply, hex2lch: hex2lch,
+  cWhite: function(Y){ return (YW + 0.05) / (Y + 0.05); },
+  cDark:  function(Y){ return (Y + 0.05) / (YD + 0.05); },
+  hour: hour, nowHours: nowHours, setForced: setForced, setInstant: setInstant,
+  current: function(){ return cur; },
+  isForced: function(){ return forced !== null; },
+  /* UI 会把自己挂进来，这里只是占位 */
+  onTick: []
+};
+
+/* 对外暴露一个可覆盖的 tick，供演示页的滑块接管 */
+window.__atriTime.tick = function(){
+  var p = stateAt(hour());
+  apply(p, false);
+  for (var i=0;i<window.__atriTime.onTick.length;i++){
+    try { window.__atriTime.onTick[i](p); } catch(e){}
+  }
+};
+
+setInterval(function(){
+  if (forced === null) window.__atriTime.tick();
+}, 20000);
+
+})();
+</script>
+
+<style>
+/* ============================================================
+   00 · DESIGN TOKENS  (对应《视觉设计规范.md》第 3 节)
+   ============================================================ */
+:root{
+  /* ── 夜海基底 ── */
+  --sea-950:#070d18; --sea-900:#0a1223; --sea-850:#0d1b33;
+  --sea-800:#142f5c; --sea-700:#223a68; --sea-600:#1f4d8a;
+  --sea-500:#2664ab; --sea-400:#3f7cc0; --sea-300:#5a8dc3;
+  --sea-200:#8fb4d6; --sea-100:#cfe0ef;
+
+  /* ── 青 · 身份色 ── */
+  --atri-700:#055579; --atri-500:#397f9d;
+
+  /* ── 红 · 唯一高饱和 ── */
+  --ribbon-600:#871c30; --ribbon-500:#b64a59;
+
+  /* ── 暖光 ── */
+  --spark-core:#fbe4cf; --spark-glow:#e8b98f; --spark-ember:#be939b;
+  --foam:#f9f9fa; --sail:#fcfaf3; --brass:#b08e61;
+
+  /* ── 吉祥物 ── */
+  --mascot-dress:#546b77; --mascot-flax:#decec2;
+  --mascot-line:#010101; --mascot-ribbon:#ce6f7d;
+
+  /* ── 语义层 · 极性令牌（§3.8.2）────────────────────────
+     这一组随极性整体翻转。夜间写在 :root，白天写在
+     html[data-polarity="day"]。组件只准引用语义名，不准引用下面
+     的 --sea-* 原始色，否则白天就会出错。
+     面板用「通道 + alpha」形式，alpha 由 --t-scrim-a 顶到 1，
+     好让极性翻转那一刻文字仍有不透明底可踩（§3.8.4）。 */
+  --panel-rgb:20 47 92;
+  --panel2-rgb:13 27 51;
+  --panel-a:calc(.62 + .38 * var(--t-scrim-a));
+  --panel2-a:calc(.84 + .16 * var(--t-scrim-a));
+
+  --bg-base:var(--sea-900);
+  --bg-panel:rgb(var(--panel-rgb) / var(--panel-a));
+  --bg-panel-alt:rgb(var(--panel2-rgb) / var(--panel2-a));
+  --bg-code:#070d18;             /* 两套极性都不反 —— 代码块永远深底 */
+  /* 遮罩颜色。**必须与 JS 里的 SCRIM_COLOR 逐字符一致** ——
+     它是参与对比度反解的常数，不等于「写着好看的那个色」。 */
+  --scrim-color:#142f5c;
+
+  --fg:#fcfaf3;
+  --fg-muted:rgba(252,250,243,.68);
+  --fg-faint:rgba(252,250,243,.60);   /* 下限按环境底的最浅处算：最差 5.4:1 */
+  --fg-onlight:#0a1223;
+
+  --accent:#70b5d5;              /* 实测修正：旧值 #397f9d 在自家底上只有 4.18:1（§3.1） */
+  --accent-deep:var(--atri-500); /* 只做填充，不承载文字 */
+  --accent-warm:#fbe4cf;         /* 夜间：高彩度琥珀点光源 */
+  --accent-alert:var(--ribbon-500);
+
+  --line-color:rgba(252,250,243,.14);
+  --line-color-strong:rgba(252,250,243,.30);
+  --line-color-accent:rgba(112,181,213,.45);
+  --line-faint:rgba(252,250,243,.07);
+  --wash:rgba(252,250,243,.06);
+  --wash-accent:rgba(112,181,213,.14);
+  --wash-warm:rgba(251,228,207,.12);
+  --wash-alert:rgba(182,74,89,.16);
+  --nav-solid:rgba(10,18,35,.72);
+  --vig-a:rgba(7,13,24,.30);
+  --vig-b:rgba(7,13,24,.46);
+  --panel-hero:linear-gradient(160deg,rgba(31,77,138,.66),rgba(13,27,51,.86));
+  --hero-glow:radial-gradient(circle,
+    rgba(251,228,207,.42) 0%,rgba(232,185,143,.20) 30%,
+    rgba(190,147,155,.09) 54%,transparent 74%);
+
+  /* ── 字体 ── */
+  --font-cjk:"Source Han Sans SC","Noto Sans SC","PingFang SC",
+             "HarmonyOS Sans SC","Microsoft YaHei",sans-serif;
+  --font-display:"JiangCheng Yuan",var(--font-cjk);
+  --font-sans:var(--font-display);
+  /* 日文：两个字体的日文支持都不可靠，只用系统明朝体 */
+  --font-jp:"Yu Mincho","Hiragino Mincho ProN","Source Han Serif JP","Noto Serif JP",serif;
+  /* 等宽：末尾必须追中文黑体，否则 mono 里的中文会回退成宋体 */
+  --font-mono:ui-monospace,"JetBrains Mono","Cascadia Mono",Consolas,
+              "SFMono-Regular","Noto Sans Mono",monospace,var(--font-cjk);
+
+  /* ── 字阶 ── */
+  --fs-hero:clamp(40px,7vw,84px);
+  --fs-h1:clamp(30px,4.2vw,50px);
+  --fs-h2:clamp(22px,2.6vw,32px);
+  --fs-h3:19px;
+  --fs-body:16px; --fs-sm:14px; --fs-xs:12.5px;
+  --fs-label:12px; --fs-code:13.5px;
+
+  /* ── 间距 / 布局 ── */
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
+  --space-5:24px; --space-6:32px; --space-7:48px; --space-8:64px;
+  --space-9:96px; --space-10:128px;
+  --maxw:1120px; --maxw-wide:1320px;
+  --sec-py:clamp(72px,10vh,132px);
+  --grid-gap:24px;
+
+  /* ── 圆角 / 切角 ── */
+  --r-0:0; --r-1:2px; --r-2:4px; --r-pill:999px; --cut:18px;
+  --r-mascot:32px;   /* 吉祥物声部容器：圆钝但不致于变成椭圆 */
+  --mascot-line-on-dark:rgba(222,206,194,.30);  /* 深底上的"描线"改用亚麻色 */
+  --cut-path:polygon(18px 0,100% 0,100% calc(100% - 18px),
+                     calc(100% - 18px) 100%,0 100%,0 18px);
+
+  /* ── 描边 / 光影 ── */
+  --glow-cold:0 0 0 1px rgba(90,141,195,.28),0 18px 48px -26px rgba(38,100,171,.60);
+  /* 暖辉跟着光层走。不支持 color-mix 的浏览器只是失去这道辉，其余不受影响 */
+  --glow-warm:0 0 26px color-mix(in srgb, var(--t-light) 24%, transparent);
+  --shadow-deep:0 24px 64px -34px rgba(4,10,22,.92);
+
+  /* ── 层级 ── */
+  --z-sea:1; --z-reflect:2; --z-content:10; --z-nav:100; --z-mascot:1100;
+
+  /* ── 动效 ── */
+  --ease-sea:cubic-bezier(.22,.61,.30,1);
+  --ease-quiet:cubic-bezier(.33,1,.68,1);
+  --dur-1:120ms; --dur-2:240ms; --dur-3:480ms; --dur-4:900ms; --dur-idle:18s;
+
+  /* ── 环境层初值（§3.8）── 由 JS 按本地时间覆写 */
+  --t-sky-top:#070d18;
+  --t-sky-mid:#0d1b33;
+  --t-sky-horizon:#223a68;
+  --t-sea-near:#142f5c;
+  --t-sea-deep:#0a1223;
+  --t-glow:#31507d;
+  --t-light:#fbe4cf;
+  --t-star:.55;
+  --t-glow-a:.07;
+  --t-scrim-a:0;
+}
+
+/* ============================================================
+   00a · 白天极性的语义层（§3.8.2）
+   同一根色相轴，整体反过来。因为这些值全部挂在语义名上，
+   所以属性一转，整页颜色就跟着转 —— 不需要给任何组件写第二套样式。
+   ============================================================ */
+html[data-polarity="day"]{
+  --panel-rgb:255 255 255;
+  --panel2-rgb:252 254 255;
+  --panel-a:calc(.62 + .38 * var(--t-scrim-a));
+  --panel2-a:calc(.80 + .20 * var(--t-scrim-a));
+
+  --bg-base:#d3eafd;
+  --bg-code:#0b2c47;             /* 仍为深底：与暖白文形成 ≈13:1 */
+  --scrim-color:#d3eafd;         /* 与 JS 的 SCRIM_COLOR.day 一致 */
+
+  --fg:#0e3557;                  /* 实测：最差 7.65:1（在页面顶边 #96d0fd 上） */
+  --fg-muted:#24486b;            /* 5.75 */
+  --fg-faint:#35566b;            /* 4.73 —— 仅装饰，关键信息用 --fg-muted */
+  --fg-onlight:#0e3557;
+
+  --accent:#0b4a7d;
+  --accent-deep:#0f5aa8;
+  --accent-warm:#7a4712;         /* 推导值：要在白面板上够 4.5:1，不能沿用淡琥珀 */
+  --accent-alert:#9e2f42;
+
+  --brass:#6b4f2e;
+  --line-color:rgba(14,53,87,.16);
+  --line-color-strong:rgba(14,53,87,.30);
+  --line-color-accent:rgba(11,74,125,.50);
+  --line-faint:rgba(14,53,87,.09);
+  --wash:rgba(14,53,87,.05);
+  --wash-accent:rgba(11,74,125,.10);
+  --wash-warm:rgba(140,85,24,.12);
+  --wash-alert:rgba(158,47,66,.14);
+  --nav-solid:rgba(236,245,254,.82);
+  --vig-a:rgba(14,53,87,.06);
+  --vig-b:rgba(14,53,87,.14);
+  --panel-hero:linear-gradient(160deg,rgba(255,255,255,.90),rgba(203,229,252,.84));
+  --hero-glow:radial-gradient(circle,
+    rgba(255,255,255,.85) 0%,rgba(223,242,250,.45) 30%,
+    rgba(183,222,252,.18) 54%,transparent 74%);
+  --glow-cold:0 0 0 1px rgba(11,74,125,.16),0 18px 48px -26px rgba(11,74,125,.22);
+  --shadow-deep:0 24px 64px -34px rgba(14,53,87,.22);
+}
+
+/* ============================================================
+   00b · 环境层与遮罩（§3.8.7）
+   把变量注册为 <color>/<number>，于是「20 秒写一次 + CSS 过渡」
+   就能得到连续观感 —— 空闲时零帧开销，不需要 rAF 常驻循环。
+   不支持 @property 的浏览器只是失去过渡，颜色本身照常工作。
+   ============================================================ */
+@property --t-sky-top     { syntax:'<color>';  inherits:true; initial-value:#070d18; }
+@property --t-sky-mid     { syntax:'<color>';  inherits:true; initial-value:#0d1b33; }
+@property --t-sky-horizon { syntax:'<color>';  inherits:true; initial-value:#223a68; }
+@property --t-sea-near    { syntax:'<color>';  inherits:true; initial-value:#142f5c; }
+@property --t-sea-deep    { syntax:'<color>';  inherits:true; initial-value:#0a1223; }
+@property --t-glow        { syntax:'<color>';  inherits:true; initial-value:#31507d; }
+@property --t-light       { syntax:'<color>';  inherits:true; initial-value:#fbe4cf; }
+@property --t-star        { syntax:'<number>'; inherits:true; initial-value:.55; }
+@property --t-glow-a      { syntax:'<number>'; inherits:true; initial-value:.07; }
+@property --t-scrim-a     { syntax:'<number>'; inherits:true; initial-value:0; }
+
+html{
+  transition:
+    --t-sky-top 20s linear, --t-sky-mid 20s linear, --t-sky-horizon 20s linear,
+    --t-sea-near 20s linear, --t-sea-deep 20s linear,
+    --t-glow 20s linear, --t-light 20s linear,
+    --t-star 20s linear, --t-glow-a 20s linear, --t-scrim-a 20s linear;
+}
+html.tt-off{ transition:none !important; }
+
+/* ============================================================
+   01 · RESET
+   ============================================================ */
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+body{
+  margin:0;
+  font-family:var(--font-sans);
+  font-size:var(--fs-body); font-weight:400;
+  line-height:1.9; letter-spacing:.02em;
+  color:var(--fg);
+  background:var(--bg-base);
+  overflow-x:hidden;
+}
+h1,h2,h3,h4{margin:0;font-weight:400;line-height:1.3}
+p{margin:0}
+a{color:inherit;text-decoration:none}
+img{display:block;max-width:100%}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+ul{margin:0;padding:0;list-style:none}
+code,kbd{font-family:var(--font-mono)}
+::selection{background:var(--accent-deep);color:var(--foam)}
+:focus-visible{outline:1px dashed var(--accent);outline-offset:6px}
+
+/* ============================================================
+   01b · 主字体：江城圆体（SIL OFL 1.1）
+   全站单一字族。首版只需 400 + 700 两个字重（共约 300KB）。
+
+   本演示页默认只探测「系统已安装」的江城圆体（local），
+   因此没有任何网络请求，也不会因字体文件缺失而阻塞加载。
+
+   要把字体随站点分发：把 woff2 放进 web/assets/fonts/，
+   再把下面每段里注释掉的 url(...) 取消注释即生效。
+   名称与许可说明见《视觉设计规范.md》§3.2.5
+   ============================================================ */
+@font-face{
+  font-family:"JiangCheng Yuan";
+  src:local("江城圆体 300W"),local("JiangChengYuanTi-Light");
+  /* src:local("江城圆体 300W"),
+      url("assets/fonts/jiangcheng-300.woff2") format("woff2"); */
+  font-weight:300;font-style:normal;font-display:swap;
+}
+@font-face{
+  font-family:"JiangCheng Yuan";
+  src:local("江城圆体"),local("江城圆体 400W"),local("JiangChengYuanTi");
+  /* src:local("江城圆体"),local("江城圆体 400W"),
+      url("assets/fonts/jiangcheng-400.woff2") format("woff2"); */
+  font-weight:400;font-style:normal;font-display:swap;
+}
+@font-face{
+  font-family:"JiangCheng Yuan";
+  src:local("江城圆体 500W"),local("JiangChengYuanTi-Medium");
+  /* src:local("江城圆体 500W"),
+      url("assets/fonts/jiangcheng-500.woff2") format("woff2"); */
+  font-weight:500;font-style:normal;font-display:swap;
+}
+@font-face{
+  font-family:"JiangCheng Yuan";
+  src:local("江城圆体 700W"),local("JiangChengYuanTi-Bold");
+  /* src:local("江城圆体 700W"),
+      url("assets/fonts/jiangcheng-700.woff2") format("woff2"); */
+  font-weight:700;font-style:normal;font-display:swap;
+}
+
+/* ── 海面：CSS 渐变层（环境层驱动）──────────────────────
+   生产版由 shader 接管（§3.8.8，第二期）；这一层就是它的兜底，
+   也是文字底下的耐看底色。 */
+.sea{
+  position:fixed; inset:0; z-index:-3; pointer-events:none;
+  background:linear-gradient(180deg,
+      var(--t-sky-top)     0%,
+      var(--t-sky-mid)    26%,
+      var(--t-sky-horizon)50%,
+      var(--t-sea-near)   74%,
+      var(--t-sea-deep)  100%);
+  background-attachment:fixed;
+}
+/* 上下暗角：把固定底色压回中间调，滚动时文字才有稳定的底 */
+.sea::before{
+  content:""; position:absolute; inset:0;
+  background:linear-gradient(180deg,
+    var(--vig-a) 0%, transparent 34%,
+    transparent 62%, var(--vig-b) 100%);
+}
+/* 地平线辉光（光层，面积受控；极性翻转时它不参与） */
+.sea::after{
+  content:""; position:absolute; inset:0;
+  background:radial-gradient(112% 42% at 50% 52%,
+    var(--t-glow) 0%, transparent 66%);
+  opacity:var(--t-glow-a);
+}
+
+/* ── 整页遮罩（§3.8.4）──────────────────────────────
+   它盖在环境层与辉光之上、所有内容之下。厚度由 JS 反解（--t-scrim-a），
+   不该有的时候就是 0，于是平时完全看不见。
+   颜色随极性整组翻转，与文字色在同一次样式写入里换掉 ——
+   它盖着的时候换，所以看不出切换。 */
+.scrim{
+  position:fixed; inset:0; z-index:-1; pointer-events:none;
+  background:var(--scrim-color);
+  opacity:var(--t-scrim-a);
+}
+
+.stars{
+  position:fixed; inset:0; z-index:-2; pointer-events:none;
+  opacity:var(--t-star);
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='280' height='280'%3E%3Cg fill='%23fcfaf3'%3E%3Ccircle cx='22' cy='34' r='1'/%3E%3Ccircle cx='146' cy='86' r='.8'/%3E%3Ccircle cx='214' cy='26' r='1.2'/%3E%3Ccircle cx='72' cy='182' r='.9'/%3E%3Ccircle cx='186' cy='214' r='.7'/%3E%3Ccircle cx='248' cy='152' r='1'/%3E%3Ccircle cx='112' cy='248' r='.8'/%3E%3Ccircle cx='40' cy='122' r='.6'/%3E%3C/g%3E%3C/svg%3E");
+  -webkit-mask-image:linear-gradient(180deg,#000 0%,transparent 46%);
+          mask-image:linear-gradient(180deg,#000 0%,transparent 46%);
+  animation:starDrift 34s var(--ease-sea) infinite;
+}
+@keyframes starDrift{
+  0%,100%{ transform:translateY(0) }
+  50%    { transform:translateY(-4px) }
+}
+
+/* ── 网格叠加（评审用） ── */
+.grid-overlay{
+  position:fixed; inset:0; z-index:900; pointer-events:none; opacity:0;
+  transition:opacity var(--dur-2) var(--ease-sea);
+  background-image:repeating-linear-gradient(90deg,transparent 0,transparent 23px,rgba(57,127,157,.22) 23px,rgba(57,127,157,.22) 24px);
+  background-position:center top;
+  background-size:calc(100% + 1px) 100%;
+}
+.grid-overlay.on{opacity:1}
+
+/* ── 通用容器 ── */
+.wrap{width:100%;max-width:var(--maxw);margin-inline:auto;padding-inline:24px}
+
+/* ── 海平线 ── */
+.horizon{
+  height:1px;border:0;margin:0;
+  background:linear-gradient(90deg,transparent,var(--line-color-strong) 12%,
+    var(--line-color-accent) 50%,var(--line-color-strong) 88%,transparent);
+}
+.horizon--dot{display:flex;align-items:center;gap:var(--space-4)}
+.horizon--dot::before,.horizon--dot::after{
+  content:"";flex:1;height:1px;
+  background:linear-gradient(90deg,transparent,var(--line-color-strong) 30%,
+    var(--line-color-accent) 100%);
+}
+.horizon--dot::after{
+  background:linear-gradient(270deg,transparent,var(--line-color-strong) 30%,
+    var(--line-color-accent) 100%);
+}
+.horizon--dot i{width:3px;height:3px;background:var(--accent);transform:rotate(45deg);flex:none}
+
+/* ============================================================
+   02 · 导航（水面倒影 · 招牌交互）
+   ============================================================ */
+.site-nav{
+  position:fixed;top:0;left:0;right:0;z-index:var(--z-nav);
+  border-bottom:1px solid transparent;
+  transition:background var(--dur-2) var(--ease-sea),
+             border-color var(--dur-2) var(--ease-sea),
+             backdrop-filter var(--dur-2) var(--ease-sea);
+}
+.site-nav__inner{
+  width:100%;max-width:var(--maxw);margin-inline:auto;padding:14px 24px;
+  display:flex;align-items:center;gap:var(--space-5);
+}
+.site-nav.solid{
+  background:var(--nav-solid);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border-bottom-color:var(--line-color);
+}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--font-display);
+  font-size:17px;font-weight:700;letter-spacing:.06em;color:var(--fg);flex:none}
+.brand img{width:34px;height:34px;object-fit:contain}
+.brand__mark{position:relative}
+.brand__mark::after{
+  content:"";position:absolute;inset:-6px;border-radius:var(--r-pill);
+  background:radial-gradient(circle,rgba(251,228,207,.30),transparent 68%);
+  opacity:0;transition:opacity var(--dur-2) var(--ease-sea);
+}
+.brand:hover .brand__mark::after{opacity:1}
+
+.nav{display:flex;margin-left:auto;min-width:0}
+.nav__list{display:flex;align-items:center;gap:var(--space-2)}
+.nav__link{
+  position:relative;display:block;padding:8px 14px;
+  font-size:14px;font-weight:700;letter-spacing:.10em;color:var(--fg-muted);
+  transition:color var(--dur-2) var(--ease-sea);
+}
+.nav__link::after{
+  content:"";position:absolute;left:14px;right:14px;bottom:2px;height:1px;
+  background:var(--accent);transform:scaleX(0);transform-origin:left;
+  transition:transform var(--dur-2) var(--ease-sea),background var(--dur-2) var(--ease-sea);
+}
+.nav__link:hover::after,.nav__link.is-active::after{transform:scaleX(1)}
+.nav__link:hover{color:var(--fg)}
+.nav__link.is-active{color:var(--accent-warm)}
+.nav__link.is-active::after{background:var(--accent-warm)}
+
+/* 倒影（嵌套在 .nav__label 内，以文字自身为定位基准） */
+.nav__mirror{
+  position:absolute;left:0;right:0;top:100%;
+  transform:scaleY(-1);
+  opacity:.20;filter:blur(1.4px);
+  pointer-events:none;user-select:none;
+  -webkit-mask-image:linear-gradient(to bottom,transparent 25%,rgba(0,0,0,.85) 100%);
+          mask-image:linear-gradient(to bottom,transparent 25%,rgba(0,0,0,.85) 100%);
+  transition:opacity var(--dur-2) var(--ease-sea);
+}
+.nav__link:hover .nav__mirror{opacity:.42;animation:ripple 2.4s var(--ease-sea) infinite}
+.nav__link.is-active .nav__mirror{opacity:.55}
+@keyframes ripple{
+  0%,100%{transform:scaleY(-1) translateY(0) skewX(0deg)}
+  28%{transform:scaleY(-1) translateY(-.5px) skewX(.7deg)}
+  64%{transform:scaleY(-1) translateY(.4px) skewX(-.6deg)}
+}
+/* 当前项的火花点 */
+.nav__link.is-active .nav__label::before{
+  content:"";position:absolute;left:50%;top:-7px;width:6px;height:6px;
+  margin-left:-3px;border-radius:50%;background:var(--accent-warm);
+  box-shadow:var(--glow-warm);
+  animation:emberBreath 5.2s var(--ease-sea) infinite;
+}
+.nav__label{position:relative;display:block}
+@keyframes emberBreath{
+  0%,100%{opacity:.82;transform:scale(1)}
+  50%{opacity:1;transform:scale(1.045)}
+}
+.nav__tools{display:flex;align-items:center;gap:var(--space-2);
+  margin-left:var(--space-4);flex:none}
+.nav__icon{width:36px;height:36px;display:grid;place-items:center;color:var(--fg-muted);
+  transition:color var(--dur-2) var(--ease-sea),background var(--dur-2) var(--ease-sea)}
+.nav__icon:hover{color:var(--accent-warm);background:var(--wash)}
+
+/* ============================================================
+   03 · HERO
+   ============================================================ */
+.hero{position:relative;padding:168px 0 0;overflow:hidden}
+.spark-light{
+  position:absolute;left:-4%;top:88px;width:640px;height:640px;border-radius:50%;
+  background:var(--hero-glow);
+  filter:blur(8px);pointer-events:none;z-index:var(--z-sea);
+  animation:emberBreath 5.4s var(--ease-sea) infinite;
+}
+.hero__grid{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto;
+  gap:var(--space-8);align-items:end;z-index:var(--z-content)}
+.hero__logo{width:88px;height:88px;object-fit:contain;margin-bottom:var(--space-5)}
+.hero__title{font-family:var(--font-display);font-size:var(--fs-hero);
+  font-weight:700;line-height:1.06;letter-spacing:.04em;margin-bottom:var(--space-4)}
+.hero__kana{font-family:var(--font-jp);font-size:clamp(14px,1.6vw,19px);
+  letter-spacing:.22em;color:var(--fg-faint);margin-bottom:var(--space-5)}
+.hero__lede{max-width:34em;color:var(--fg-muted);margin-bottom:var(--space-6)}
+.hero__cta{display:flex;flex-wrap:wrap;gap:var(--space-4);margin-bottom:var(--space-9)}
+.hero__figure{position:relative;align-self:end}
+.hero__figure img{
+  height:min(58vh,520px);width:auto;
+  -webkit-mask-image:linear-gradient(to top,transparent 2%,#000 16%);
+          mask-image:linear-gradient(to top,transparent 2%,#000 16%);
+  animation:floatSlow 22s var(--ease-sea) infinite;
+}
+@keyframes floatSlow{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+
+/* stat 组 */
+.stats{display:flex;flex-wrap:wrap;gap:var(--space-2) var(--space-8);padding-bottom:var(--space-6)}
+.stat__num{font-family:var(--font-display);font-size:34px;line-height:1.1;
+  letter-spacing:.02em;font-variant-numeric:tabular-nums;color:var(--fg)}
+.stat__num em{font-style:normal;font-size:16px;color:var(--fg-faint);margin-left:2px}
+.stat__bar{width:var(--space-4);height:1px;background:var(--line-color-strong);margin:10px 0 8px}
+.stat__label{font-family:var(--font-mono);font-size:var(--fs-label);
+  letter-spacing:.22em;color:var(--fg-faint)}
+.stat--warm .stat__num{color:var(--accent-warm)}
+
+/* ============================================================
+   04 · 区块骨架
+   ============================================================ */
+section{padding-block:var(--sec-py)}
+.sec__head{margin-bottom:var(--space-8);max-width:38em}
+.sec__tag{display:flex;align-items:center;gap:var(--space-3);
+  font-family:var(--font-mono);font-size:var(--fs-label);
+  letter-spacing:.22em;color:var(--accent);margin-bottom:var(--space-5)}
+.sec__tag::before{content:"";width:24px;height:1px;background:currentColor;flex:none}
+.sec__title{font-family:var(--font-display);font-size:var(--fs-h1);
+  font-weight:700;letter-spacing:.02em;margin-bottom:var(--space-4)}
+.sec__desc{color:var(--fg-muted);max-width:34em}
+.sec__note{margin-top:var(--space-5);font-size:var(--fs-xs);color:var(--fg-faint)}
+
+/* 滚动入场 */
+[data-reveal]{opacity:0;transform:translateY(18px);
+  transition:opacity var(--dur-3) var(--ease-sea),transform var(--dur-3) var(--ease-sea)}
+[data-reveal].in{opacity:1;transform:none}
+[data-reveal][data-delay="1"]{transition-delay:60ms}
+[data-reveal][data-delay="2"]{transition-delay:120ms}
+
+/* ============================================================
+   05 · 按钮 / 标签
+   ============================================================ */
+.btn{
+  display:inline-flex;align-items:center;gap:10px;height:44px;padding:0 20px;
+  border:1px solid var(--line-color-strong);border-radius:var(--r-1);
+  font-size:14px;font-weight:700;letter-spacing:.10em;color:var(--fg);
+  transition:color var(--dur-2) var(--ease-sea),border-color var(--dur-2) var(--ease-sea),
+             background var(--dur-2) var(--ease-sea),box-shadow var(--dur-2) var(--ease-sea),
+             transform var(--dur-1) var(--ease-sea);
+}
+.btn:hover{border-color:var(--line-color-accent);background:var(--wash-accent)}
+.btn:active{transform:translateY(1px)}
+.btn--sm{height:36px;padding:0 14px;font-size:13px}
+.btn--solid{
+  background:var(--spark-core);border-color:var(--spark-core);color:var(--fg-onlight);
+}
+.btn--solid:hover{background:var(--spark-glow);border-color:var(--spark-glow);box-shadow:var(--glow-warm)}
+.btn--ghost{border-color:transparent;padding:0 4px;height:auto;color:var(--fg-muted);font-weight:400}
+.btn--ghost:hover{color:var(--accent-warm);background:none}
+.btn--ghost span{border-bottom:1px solid var(--line-color-strong);padding-bottom:2px}
+.btn--ghost:hover span{border-bottom-color:currentColor}
+.btn[disabled]{opacity:.38;cursor:not-allowed}
+.btn[disabled]:hover{background:none;border-color:var(--line-color-strong)}
+.btn__ico{width:14px;height:14px;flex:none}
+
+.tag{
+  display:inline-flex;align-items:center;height:22px;padding:0 9px;
+  font-family:var(--font-mono);font-size:var(--fs-label);letter-spacing:.14em;
+  clip-path:polygon(8px 0,100% 0,100% 100%,0 100%,0 8px);
+}
+.tag--cyan{background:var(--wash-accent);color:var(--accent)}
+.tag--warm{background:var(--wash-warm);color:var(--accent-warm)}
+.tag--ink{background:var(--wash);color:var(--fg-muted)}
+.tag--alert{background:var(--wash-alert);color:var(--accent-alert)}
+.tagrow{display:flex;flex-wrap:wrap;gap:var(--space-2)}
+
+/* ============================================================
+   06 · 面板 / 功能条目
+   ============================================================ */
+.panel{position:relative;padding:1px;background:var(--line-color);
+  clip-path:var(--cut-path)}
+.panel__body{clip-path:var(--cut-path);background:var(--bg-panel);
+  padding:var(--space-6);height:100%}
+.panel--hero>.panel__body{background:var(--panel-hero);box-shadow:var(--glow-cold) inset}
+.panel--plain{padding:0;background:none;clip-path:none;
+  border:1px solid var(--line-color)}
+.panel--plain>.panel__body{clip-path:none;background:var(--bg-panel-alt)}
+.panel--lift{transition:transform var(--dur-2) var(--ease-sea),
+  background var(--dur-2) var(--ease-sea)}
+.panel--lift:hover{transform:translateY(-4px);background:var(--line-color-accent)}
+
+.grid{display:grid;gap:var(--grid-gap)}
+.grid--3{grid-template-columns:repeat(auto-fit,minmax(268px,1fr))}
+.grid--2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr));align-items:start}
+
+.feature{position:relative;padding-left:var(--space-5)}
+.feature::before{content:"";position:absolute;left:0;top:2px;bottom:0;width:1px;
+  background:linear-gradient(180deg,var(--line-color-accent),transparent 78%)}
+.feature__idx{font-family:var(--font-mono);font-size:var(--fs-label);
+  letter-spacing:.22em;color:var(--brass);display:block;margin-bottom:var(--space-3)}
+.feature__title{font-size:var(--fs-h3);font-weight:700;letter-spacing:.02em;
+  margin-bottom:var(--space-2)}
+.feature__desc{font-size:var(--fs-sm);color:var(--fg-muted);line-height:1.85}
+
+/* ============================================================
+   07 · 代码块 / 表格 / 提示条
+   ============================================================ */
+.code{border:1px solid var(--line-color);background:var(--bg-code);
+  border-radius:var(--r-0);overflow:hidden}
+.code__bar{display:flex;align-items:center;gap:var(--space-3);
+  padding:10px var(--space-4);border-bottom:1px solid var(--line-color)}
+.code__dot{width:5px;height:5px;background:var(--accent);transform:rotate(45deg);flex:none}
+.code__lang{font-family:var(--font-mono);font-size:var(--fs-label);
+  letter-spacing:.20em;color:var(--fg-faint)}
+.code__copy{margin-left:auto;font-family:var(--font-mono);font-size:var(--fs-label);
+  letter-spacing:.16em;color:var(--fg-faint)}
+.code__copy:hover{color:var(--accent-warm)}
+.code pre{margin:0;padding:var(--space-5);overflow-x:auto;
+  font-family:var(--font-mono);font-size:var(--fs-code);line-height:1.8;
+  -webkit-overflow-scrolling:touch}
+.tk-c{color:var(--fg-faint)}
+.tk-s{color:var(--accent)}
+.tk-k{color:var(--spark-glow)}
+.tk-p{color:var(--fg-muted)}
+
+table{width:100%;border-collapse:collapse;font-size:var(--fs-sm)}
+th{text-align:left;font-family:var(--font-mono);font-size:var(--fs-label);
+  letter-spacing:.20em;color:var(--fg-faint);font-weight:400;
+  padding:0 var(--space-4) var(--space-3)}
+td{padding:14px var(--space-4);border-top:1px solid var(--line-faint);
+  vertical-align:top}
+tr:hover td{background:var(--wash)}
+td.cmd{font-family:var(--font-mono);font-size:13px;color:var(--accent)}
+td.arg{font-family:var(--font-mono);font-size:13px;color:var(--fg-muted)}
+td.dim{color:var(--fg-muted)}
+
+.callout{display:flex;gap:var(--space-4);padding:var(--space-2) 0 var(--space-2) var(--space-4);
+  border-left:3px solid var(--accent)}
+.callout--tip{border-left-color:var(--accent-warm);background:var(--wash-accent)}
+.callout--warn{border-left-color:var(--accent-alert)}
+.callout--danger{border-left-color:var(--accent-alert)}
+.callout__title{font-size:var(--fs-sm);letter-spacing:.06em;margin-bottom:2px}
+.callout__text{font-size:var(--fs-sm);color:var(--fg-muted)}
+
+/* ============================================================
+   08 · 色板 / 令牌展示
+   ============================================================ */
+.swatches{display:grid;gap:1px;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));
+  background:var(--line-color);border:1px solid var(--line-color)}
+.sw{background:var(--bg-panel-alt);padding:0}
+.sw__chip{height:78px;display:block}
+.sw__meta{padding:var(--space-3) var(--space-4) var(--space-4)}
+.sw__name{font-family:var(--font-mono);font-size:12px;letter-spacing:.08em;
+  color:var(--fg);display:block}
+.sw__hex{font-family:var(--font-mono);font-size:11.5px;letter-spacing:.06em;
+  color:var(--fg-muted);display:block;margin-top:2px}
+.sw__src{font-size:11.5px;color:var(--fg-faint);display:block;margin-top:6px;
+  padding-top:6px;border-top:1px solid var(--line-color)}
+.sw__src b{color:var(--accent);font-weight:400}
+
+.scale{display:grid;gap:var(--space-4)}
+.scale__row{display:grid;grid-template-columns:126px 1fr;gap:var(--space-5);
+  align-items:baseline;padding-bottom:var(--space-4);
+  border-bottom:1px solid var(--line-faint)}
+.scale__key{font-family:var(--font-mono);font-size:12px;letter-spacing:.10em;
+  color:var(--fg-faint)}
+.scale__key em{display:block;font-style:normal;color:var(--fg-faint);opacity:.7;
+  font-size:11px;margin-top:2px}
+.spec-row{display:flex;flex-wrap:wrap;gap:var(--space-4)}
+
+/* 字体分工表 */
+.ff-roles{display:grid;gap:1px;background:var(--line-color);border:1px solid var(--line-color)}
+.ff-role{background:var(--bg-panel-alt);padding:var(--space-4) var(--space-5);
+  display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:var(--space-4);
+  align-items:center}
+.ff-role__name{font-size:var(--fs-sm)}
+.ff-role__note{font-family:var(--font-mono);font-size:11.5px;color:var(--fg-faint);
+  letter-spacing:.06em;text-align:right}
+@media (max-width:639px){
+  .ff-role{grid-template-columns:1fr;gap:var(--space-2)}
+  .ff-role__note{text-align:left}
+}
+
+/* 字重轴：语义刻度（v0.3 起替代已弃用的方圆轴） */
+.weights{display:grid;gap:var(--space-4)}
+.weights__row{display:grid;grid-template-columns:186px minmax(0,1fr);gap:var(--space-5);
+  align-items:baseline;padding-bottom:var(--space-3);
+  border-bottom:1px solid var(--line-faint)}
+.weights__k{font-family:var(--font-mono);font-size:12px;letter-spacing:.10em;
+  color:var(--fg-faint)}
+.weights__k em{display:block;font-style:normal;font-size:11px;opacity:.7;margin-top:2px}
+.weights__k i{display:block;font-style:normal;font-size:10.5px;letter-spacing:.14em;
+  margin-top:5px;color:var(--accent)}
+.weights__k i.is-opt{color:var(--fg-faint)}
+.weights__k i.is-no{color:var(--ribbon-500)}
+.weights__row--no{opacity:.40}
+.weights__row--no .weights__sample{text-decoration:line-through;
+  text-decoration-color:rgba(182,74,89,.55);text-decoration-thickness:1px}
+.weights__sample{font-size:21px;letter-spacing:.04em;line-height:1.5}
+.weights__axis{display:flex;justify-content:space-between;gap:var(--space-5);
+  margin-top:var(--space-5);font-family:var(--font-mono);font-size:11px;
+  letter-spacing:.10em;color:var(--fg-faint)}
+@media (max-width:639px){.weights__row{grid-template-columns:1fr;gap:var(--space-2)}
+  .weights__axis{flex-direction:column;gap:var(--space-1)}}
+
+/* 字体可用性提示 */
+.ffstatus{display:flex;align-items:baseline;gap:var(--space-3);flex-wrap:wrap;
+  padding:12px var(--space-4);border:1px solid var(--line-color);
+  font-size:var(--fs-xs);color:var(--fg-muted)}
+.ffstatus b{font-family:var(--font-mono);font-weight:400;letter-spacing:.10em;
+  color:var(--accent)}
+.ffstatus--ok{border-color:var(--line-color-accent)}
+.ffstatus--warn{border-color:var(--accent-warm)}
+
+.bars{display:grid;gap:var(--space-3)}
+.bar{display:flex;align-items:center;gap:var(--space-4)}
+.bar__k{width:92px;flex:none;font-family:var(--font-mono);font-size:12px;
+  color:var(--fg-faint);letter-spacing:.08em}
+.bar__v{height:6px;background:linear-gradient(90deg,var(--accent-deep),var(--accent))}
+.bar__n{font-family:var(--font-mono);font-size:11.5px;color:var(--fg-faint)}
+
+.shape-demo{display:flex;flex-wrap:wrap;gap:var(--space-4)}
+.shape{width:112px;height:76px;display:grid;place-items:center;
+  font-family:var(--font-mono);font-size:11.5px;color:var(--fg-faint);
+  border:1px solid var(--line-color-accent);background:var(--wash-accent)}
+.shape--cut{clip-path:polygon(18px 0,100% 0,100% calc(100% - 18px),
+  calc(100% - 18px) 100%,0 100%,0 18px)}
+.shape--r2{border-radius:var(--r-2)}
+.shape--pill{border-radius:var(--r-pill);border-color:var(--mascot-line-on-dark);
+  border-width:1.5px;background:rgba(84,107,119,.28);color:var(--mascot-flax)}
+.shadow-demo{display:flex;flex-wrap:wrap;gap:var(--space-5);align-items:center}
+.shadow-demo>div{width:150px;height:78px;display:grid;place-items:center;
+  font-family:var(--font-mono);font-size:11px;color:var(--fg-faint);
+  background:var(--bg-panel);border:1px solid var(--line-color)}
+.shadow-demo .s2{box-shadow:var(--glow-cold)}
+.shadow-demo .s3{box-shadow:var(--glow-warm)}
+.shadow-demo .s4{box-shadow:var(--shadow-deep);border-color:transparent}
+
+/* ============================================================
+   09 · 流程 / 时间线
+   ============================================================ */
+.flow{display:grid;gap:0}
+.flow__item{position:relative;padding:0 0 var(--space-6) var(--space-6)}
+.flow__item::before{content:"";position:absolute;left:3px;top:12px;bottom:-4px;width:1px;
+  background:var(--line-color-accent)}
+.flow__item:last-child::before{display:none}
+.flow__item::after{content:"";position:absolute;left:0;top:8px;width:7px;height:7px;
+  border-radius:50%;background:var(--accent)}
+.flow__item--opt::after{background:transparent;box-shadow:inset 0 0 0 1px var(--accent)}
+.flow__item--db::after{background:var(--brass)}
+.flow__t{font-size:var(--fs-sm);letter-spacing:.06em}
+.flow__d{font-family:var(--font-mono);font-size:11.5px;color:var(--fg-faint);
+  letter-spacing:.04em;margin-top:2px}
+
+/* ============================================================
+   10 · 状态态（吉祥物声部）
+   ============================================================ */
+.states{display:grid;gap:var(--grid-gap);grid-template-columns:repeat(auto-fit,minmax(236px,1fr))}
+.state{
+  border:1.5px solid var(--mascot-line-on-dark);
+  border-radius:var(--r-mascot);
+  background:rgba(84,107,119,.14);
+  padding:var(--space-6) var(--space-5);
+  display:flex;flex-direction:column;align-items:center;text-align:center;
+  gap:var(--space-3);
+}
+.state img{width:88px;height:88px;object-fit:contain;
+  animation:breath 6s var(--ease-sea) infinite}
+.state--tilt img{transform:rotate(2deg);animation:none}
+.state--dim img{opacity:.62;animation:none}
+@keyframes breath{0%,100%{transform:scale(1)}50%{transform:scale(1.012)}}
+.state__voice{font-size:var(--fs-sm);color:var(--mascot-flax);line-height:1.7;
+  letter-spacing:.04em}
+.state__k{font-family:var(--font-mono);font-size:11px;letter-spacing:.20em;
+  color:rgba(222,206,194,.5)}
+
+/* ============================================================
+   11 · 动效演示
+   ============================================================ */
+.motion-demo{display:grid;gap:var(--grid-gap);grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+.reflect-stage{position:relative;padding-bottom:64px;overflow:hidden}
+.reflect-stage__word{font-family:var(--font-display);font-size:32px;
+  letter-spacing:.20em;color:var(--fg);position:relative;display:inline-block}
+.reflect-stage__mirror{
+  position:absolute;left:0;right:0;top:100%;transform:scaleY(-1);
+  opacity:.24;filter:blur(1.4px);pointer-events:none;
+  -webkit-mask-image:linear-gradient(to bottom,transparent 25%,rgba(0,0,0,.85) 100%);
+          mask-image:linear-gradient(to bottom,transparent 25%,rgba(0,0,0,.85) 100%);
+  animation:ripple 2.6s var(--ease-sea) infinite;
+}
+.reflect-stage__line{position:absolute;left:0;right:0;bottom:64px;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(90,141,195,.45),transparent)}
+.motion-list{display:grid;gap:var(--space-3);font-size:var(--fs-sm);color:var(--fg-muted)}
+.motion-list li{display:flex;gap:var(--space-4);align-items:baseline}
+.motion-list b{font-family:var(--font-mono);font-weight:400;font-size:12px;
+  color:var(--accent);min-width:96px;flex:none}
+
+/* ============================================================
+   12 · 页脚
+   ============================================================ */
+.footer{position:relative;padding-top:var(--space-8)}
+.footer__grid{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:var(--space-7);
+  padding-block:var(--space-8)}
+.footer__brand{display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)}
+.footer__brand img{width:52px;height:52px;object-fit:contain}
+.footer__brand span{font-family:var(--font-display);font-size:20px;font-weight:700;letter-spacing:.06em}
+.footer__kana{font-family:var(--font-jp);font-size:13px;letter-spacing:.16em;
+  color:var(--fg-faint)}
+.footer__col h4{font-family:var(--font-mono);font-size:var(--fs-label);
+  letter-spacing:.22em;color:var(--accent);margin-bottom:var(--space-4);font-weight:400}.footer__col li{margin-bottom:var(--space-3)}
+.footer__col a{font-size:var(--fs-sm);color:var(--fg-muted);
+  transition:color var(--dur-2) var(--ease-sea)}
+.footer__col a:hover{color:var(--accent-warm)}
+.footer__mirror-wrap{position:relative;overflow:hidden;height:46px}
+.footer__mirror-wrap img{
+  width:52px;height:52px;object-fit:contain;position:absolute;left:0;top:-52px;
+  transform:scaleY(-1);transform-origin:center;
+  opacity:.14;filter:blur(1.6px);
+  -webkit-mask-image:linear-gradient(to bottom,transparent 30%,rgba(0,0,0,.8) 100%);
+          mask-image:linear-gradient(to bottom,transparent 30%,rgba(0,0,0,.8) 100%);
+}
+.footer__bottom{display:flex;flex-wrap:wrap;gap:var(--space-4);
+  justify-content:space-between;padding-block:var(--space-5);
+  font-size:var(--fs-xs);color:var(--fg-faint)}
+.footer__bottom span{font-family:var(--font-mono);letter-spacing:.10em}
+
+/* ============================================================
+   13 · 吉祥物挂件
+   ============================================================ */
+.mascot{position:fixed;right:24px;bottom:24px;z-index:var(--z-mascot);
+  display:flex;flex-direction:column;align-items:flex-end;gap:10px}
+.mascot__btn{width:88px;height:88px;display:grid;place-items:center;
+  border-radius:var(--r-pill);transition:transform var(--dur-2) var(--ease-sea)}
+.mascot__btn img{width:100%;height:100%;object-fit:contain;
+  animation:breath 6s var(--ease-sea) infinite}
+.mascot__btn:hover{transform:translateY(-3px)}
+.mascot__bubble{
+  max-width:230px;padding:12px 18px;position:relative;
+  border:1.5px solid rgba(222,206,194,.42);border-radius:var(--r-pill);
+  background:rgba(84,107,119,.30);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  font-size:13px;line-height:1.7;letter-spacing:.04em;color:var(--mascot-flax);
+  opacity:0;transform:translateY(6px) scale(.96);pointer-events:none;
+  transition:opacity var(--dur-2) var(--ease-sea),transform var(--dur-2) var(--ease-sea);
+}
+.mascot.on .mascot__bubble{opacity:1;transform:none;pointer-events:auto}
+.mascot__close{position:absolute;top:-8px;right:-6px;width:20px;height:20px;
+  border-radius:var(--r-pill);border:1.5px solid rgba(222,206,194,.42);
+  background:var(--mascot-dress);color:var(--mascot-flax);font-size:11px;
+  display:grid;place-items:center;line-height:1}
+
+/* ============================================================
+   16 · 昼夜控制台（§3.8 演示）
+   ============================================================ */
+.daybar{border:1px solid var(--line-color);background:var(--bg-panel-alt);
+  padding:var(--space-6)}
+.daybar__top{display:flex;align-items:baseline;gap:var(--space-4);
+  flex-wrap:wrap;margin-bottom:var(--space-4)}
+.daybar__clock{font-family:var(--font-mono);font-size:28px;letter-spacing:.04em;
+  font-variant-numeric:tabular-nums;color:var(--fg)}
+.daybar__live{margin-left:auto;font-family:var(--font-mono);font-size:11px;
+  letter-spacing:.18em;color:var(--fg-faint)}
+.daybar__foot{display:flex;flex-wrap:wrap;gap:var(--space-3);align-items:center;
+  margin-top:var(--space-5);font-family:var(--font-mono);font-size:11.5px;
+  letter-spacing:.10em;color:var(--fg-faint)}
+.sec__sub{font-family:var(--font-mono);font-size:var(--fs-label);letter-spacing:.22em;
+  color:var(--fg-faint);margin-bottom:var(--space-5)}
+
+.pol{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;
+  font-family:var(--font-mono);font-size:11.5px;letter-spacing:.16em;
+  border:1px solid currentColor;color:var(--accent)}
+.pol--day{color:var(--accent-warm)}
+
+/* 时间轨道 */
+.rail{position:relative;height:76px;margin-top:var(--space-5);
+  border:1px solid var(--line-color);overflow:hidden}
+.rail__band{position:absolute;inset:0;display:grid;
+  grid-template-rows:58% 42%}
+.rail__band>i{display:block}
+.rail__dead{position:absolute;top:0;bottom:0;
+  background:repeating-linear-gradient(135deg,
+    rgba(182,74,89,.34) 0 5px, transparent 5px 10px);
+  border-left:1px solid var(--ribbon-500);border-right:1px solid var(--ribbon-500)}
+.rail__switch{position:absolute;top:0;bottom:0;width:2px;background:var(--accent-warm)}
+.rail__switch::after{content:attr(data-label);position:absolute;left:50%;
+  transform:translateX(-50%);top:3px;font-family:var(--font-mono);
+  font-size:9.5px;letter-spacing:.06em;white-space:nowrap;color:var(--fg);
+  background:var(--nav-solid);padding:1px 5px}
+/* 遮罩厚度条：每格对应一段时间，高度 = 该时刻反解出的遮罩不透明度 */
+.rail__bars{position:absolute;left:0;right:0;bottom:0;height:18px;
+  display:flex;align-items:flex-end;gap:1px;
+  background:rgba(0,0,0,.20);border-top:1px solid var(--line-color)}
+.rail__bar{flex:1;background:var(--accent-warm);min-height:1px}
+.rail__now{position:absolute;top:0;bottom:0;width:1px;background:var(--fg)}
+.rail__now::before{content:"";position:absolute;top:-3px;left:-3px;width:7px;height:7px;
+  background:var(--fg);transform:rotate(45deg)}
+.rail__axis{position:relative;height:18px;margin-top:4px}
+.rail__axis span{position:absolute;transform:translateX(-50%);
+  font-family:var(--font-mono);font-size:10px;letter-spacing:.06em;
+  color:var(--fg-muted);white-space:nowrap}
+
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;
+  height:22px;background:transparent;cursor:pointer;margin:0}
+input[type=range]::-webkit-slider-runnable-track{
+  height:2px;background:var(--line-color-strong)}
+input[type=range]::-moz-range-track{
+  height:2px;background:var(--line-color-strong)}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;width:11px;height:11px;margin-top:-5px;
+  border-radius:0;background:var(--fg);border:0;transform:rotate(45deg)}
+input[type=range]::-moz-range-thumb{
+  width:11px;height:11px;border-radius:0;background:var(--fg);border:0}
+input[type=range]:focus-visible{outline:1px dashed var(--accent);outline-offset:6px}
+
+.moments{display:flex;flex-wrap:wrap;gap:var(--space-2);margin-top:var(--space-4)}
+.moment{display:inline-flex;align-items:baseline;gap:6px;height:30px;padding:0 11px;
+  border:1px solid var(--line-color);background:transparent;color:var(--fg-muted);
+  font-family:var(--font-mono);font-size:11.5px;letter-spacing:.08em;cursor:pointer;
+  transition:color var(--dur-2) var(--ease-sea),border-color var(--dur-2) var(--ease-sea)}
+.moment:hover{border-color:var(--line-color-accent);color:var(--fg)}
+.moment.is-on{border-color:var(--accent);color:var(--accent)}
+.moment--flip{border-style:dashed}
+.moment--flip.is-on{border-color:var(--accent-warm);color:var(--accent-warm)}
+.moment b{font-weight:400;color:var(--fg-faint)}
+
+/* 令牌对照 */
+.polpair{border:1px solid var(--line-color);background:var(--line-color);
+  display:grid;gap:1px}
+.polpair__head,.polpair__row{display:grid;
+  grid-template-columns:minmax(150px,1.25fr) 1fr 1fr}
+.polpair__head{background:var(--bg-panel-alt);font-family:var(--font-mono);
+  font-size:11px;letter-spacing:.16em;color:var(--fg-faint)}
+.polpair__head>*,.polpair__row>*{padding:11px var(--space-4);min-width:0}
+.polpair__head>*+*,.polpair__row>*+*{box-shadow:inset 1px 0 0 var(--line-color)}
+.polpair__row{background:var(--bg-panel-alt)}
+.polpair__k{font-family:var(--font-mono);font-size:12px;color:var(--fg)}
+.polpair__k em{display:block;font-style:normal;font-size:11px;color:var(--fg-faint);
+  margin-top:3px}
+.polpair__v{display:flex;align-items:center;gap:9px;min-width:0}
+.polpair__chip{width:22px;height:22px;flex:none;border:1px solid var(--line-color);
+  border-radius:var(--r-1)}
+.polpair__hex{font-family:var(--font-mono);font-size:11.5px;color:var(--fg-muted);
+  overflow-wrap:anywhere}
+.polpair__row--frozen .polpair__k::after{content:"冻结";margin-left:7px;
+  font-family:var(--font-mono);font-size:10px;letter-spacing:.10em;
+  color:var(--accent-warm);border:1px solid currentColor;padding:0 4px}
+@media (max-width:639px){
+  .polpair__head,.polpair__row{grid-template-columns:1fr}
+  .polpair__head{display:none}
+  .polpair__row>*+*{box-shadow:none;border-top:1px solid var(--line-color)}
+}
+
+/* 死区图 */
+.deadfig{border:1px solid var(--line-color);background:var(--bg-code);
+  padding:var(--space-5) var(--space-5) var(--space-4)}
+.deadfig__plot{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.deadfig__plot svg{display:block;width:100%;min-width:560px;height:auto}
+.deadfig__cap{margin-top:var(--space-4);font-size:var(--fs-xs);color:var(--fg-muted);
+  line-height:1.9}
+
+/* ============================================================
+   17 · 响应式
+   ============================================================ */
+@media (max-width:899px){
+  .hero__grid{grid-template-columns:1fr}
+  .hero__figure{display:none}
+  .footer__grid{grid-template-columns:1fr 1fr;gap:var(--space-6)}
+}
+@media (max-width:639px){
+  .site-nav__inner{padding:10px 14px;gap:var(--space-3)}
+  .nav__mirror{display:none}
+  .nav{flex:1;margin-left:var(--space-3);
+    overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .nav::-webkit-scrollbar{display:none}
+  .nav__tools{margin-left:0}
+  .nav__list{gap:0}
+  .nav__link{white-space:nowrap;padding:8px 10px}
+  .nav__link.is-active::after{height:2px;background:var(--accent-warm);bottom:0}
+  .nav__link.is-active .nav__label::before{display:none}
+  .brand__name{display:none}
+  .hero{padding-top:112px}
+  .spark-light{width:340px;height:340px;left:-20%}
+  .scale__row{grid-template-columns:1fr;gap:var(--space-3)}
+  .footer__grid{grid-template-columns:1fr}
+  .mascot{right:14px;bottom:14px}
+  .mascot__btn{width:64px;height:64px}
+}
+
+/* ============================================================
+   15 · 动效降级
+   ============================================================ */
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{
+    animation-duration:.01ms !important;animation-iteration-count:1 !important;
+    transition-duration:var(--dur-1) !important;
+  }
+  .nav__mirror,.reflect-stage__mirror{animation:none !important}
+  [data-reveal]{opacity:1;transform:none}
+}
+</style>
+</head>
+<body>
+<div class="sea" aria-hidden="true"></div>
+<div class="scrim" aria-hidden="true"></div>
+<div class="stars" aria-hidden="true"></div>
+<div class="grid-overlay" id="gridOverlay" aria-hidden="true"></div>
+
+<!-- ══════════ 导航 ══════════ -->
+<header class="site-nav" id="siteNav">
+ <div class="site-nav__inner">
+  <a class="brand" href="#top">
+    <span class="brand__mark"><img src="ATRI-bot-1k.png" alt="ATRI-bot Logo"></span>
+    <span class="brand__name">ATRI-bot</span>
+  </a>
+  <nav class="nav" aria-label="主导航">
+    <ul class="nav__list">
+      <li><a class="nav__link is-active" href="#top"><span class="nav__label">首页<span class="nav__mirror" aria-hidden="true">首页</span></span></a></li>
+      <li><a class="nav__link" href="#color"><span class="nav__label">色彩<span class="nav__mirror" aria-hidden="true">色彩</span></span></a></li>
+      <li><a class="nav__link" href="#daynight"><span class="nav__label">昼夜<span class="nav__mirror" aria-hidden="true">昼夜</span></span></a></li>
+      <li><a class="nav__link" href="#type"><span class="nav__label">字体<span class="nav__mirror" aria-hidden="true">字体</span></span></a></li>
+      <li><a class="nav__link" href="#parts"><span class="nav__label">组件<span class="nav__mirror" aria-hidden="true">组件</span></span></a></li>
+      <li><a class="nav__link" href="#motion"><span class="nav__label">动效<span class="nav__mirror" aria-hidden="true">动效</span></span></a></li>
+    </ul>
+  </nav>
+  <div class="nav__tools">
+    <button class="nav__icon" id="gridBtn" title="网格叠加 (G)" aria-label="切换网格叠加">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true">
+        <path d="M1 5.5h14M1 10.5h14M5.5 1v14M10.5 1v14"/>
+      </svg>
+    </button>
+    <a class="nav__icon" href="https://github.com/114514ggb/ATRI-bot" target="_blank" rel="noopener" title="GitHub" aria-label="GitHub 仓库">
+      <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38v-1.33c-2.23.48-2.7-1.07-2.7-1.07-.36-.93-.89-1.18-.89-1.18-.73-.5.06-.49.06-.49.8.06 1.23.83 1.23.83.71 1.22 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.83-2.15-.09-.2-.36-1.02.07-2.13 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.03 2.2-.82 2.2-.82.43 1.11.16 1.93.08 2.13.51.56.82 1.28.82 2.15 0 3.07-1.86 3.75-3.65 3.95.29.25.54.73.54 1.48v2.2c0 .21.15.45.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>
+      </svg>
+    </a>
+  </div>
+ </div>
+</header>
+
+<main id="top">
+
+<!-- ══════════ HERO ══════════ -->
+<div class="hero">
+  <div class="spark-light" aria-hidden="true"></div>
+  <div class="wrap">
+    <div class="hero__grid">
+      <div>
+        <img class="hero__logo" src="ATRI-bot-1k.png" alt="" aria-hidden="true">
+        <h1 class="hero__title">ATRI-bot</h1>
+        <p class="hero__kana" lang="ja">時よ止まれ、おまえは美しい</p>
+        <p class="hero__lede">
+          一个基于 NapCat 对接、专注于群聊场景的 QQ LLM Bot。具备结构化决策输出、
+          两级记忆系统与混合检索能力，以依赖注入 + 全异步的方式组织全部服务。
+        </p>
+        <div class="hero__cta">
+          <a class="btn btn--solid" href="#parts">
+            <span>快速开始</span>
+            <svg class="btn__ico" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><path d="M2 7h10M8 3l4 4-4 4"/></svg>
+          </a>
+          <a class="btn" href="https://github.com/114514ggb/ATRI-bot" target="_blank" rel="noopener">查看源码</a>
+        </div>
+      </div>
+      <div class="hero__figure">
+        <img src="atri.png" alt="亚托莉立绘">
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat stat--warm">
+        <div class="stat__num">17</div>
+        <div class="stat__bar"></div>
+        <div class="stat__label">内置工具</div>
+      </div>
+      <div class="stat">
+        <div class="stat__num">2</div>
+        <div class="stat__bar"></div>
+        <div class="stat__label">级记忆</div>
+      </div>
+      <div class="stat">
+        <div class="stat__num">8</div>
+        <div class="stat__bar"></div>
+        <div class="stat__label">记忆分类</div>
+      </div>
+      <div class="stat">
+        <div class="stat__num">1.2<em>.4</em></div>
+        <div class="stat__bar"></div>
+        <div class="stat__label">当前版本</div>
+      </div>
+    </div>
+  </div>
+  <hr class="horizon">
+</div>
+
+<!-- ══════════ 色彩 ══════════ -->
+<section id="color">
+  <div class="wrap">
+    <div class="sec__head" data-reveal>
+      <div class="sec__tag">01 / 色彩</div>
+      <h2 class="sec__title">夜海是底，光是稀缺资源</h2>
+      <p class="sec__desc">
+        全部色值取自参考图实测采样。深蓝承担 66.8% 的画面，暖色只有 8.2% ——
+        因此暖色被当作配额管理：每屏最多出现一处当"主角"，
+        红色（领巾）每屏最多一处。
+      </p>
+    </div>
+
+    <h3 style="font-family:var(--font-mono);font-size:var(--fs-label);letter-spacing:.22em;color:var(--fg-faint);margin-bottom:var(--space-5)" data-reveal>夜海基底 · SEA</h3>
+    <div class="swatches" data-reveal style="margin-bottom:var(--space-8)">
+      <div class="sw"><span class="sw__chip" style="background:#070d18"></span><span class="sw__meta"><b class="sw__name">--sea-950</b><span class="sw__hex">#070d18</span><span class="sw__src">代码块底 · 模态遮罩</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#0a1223"></span><span class="sw__meta"><b class="sw__name">--sea-900</b><span class="sw__hex">#0a1223</span><span class="sw__src">页面最底</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#142f5c"></span><span class="sw__meta"><b class="sw__name">--sea-800</b><span class="sw__hex">#142f5c</span><span class="sw__src"><b>实测</b> 最深水</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#223a68"></span><span class="sw__meta"><b class="sw__name">--sea-700</b><span class="sw__hex">#223a68</span><span class="sw__src"><b>实测</b> 深水</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#1f4d8a"></span><span class="sw__meta"><b class="sw__name">--sea-600</b><span class="sw__hex">#1f4d8a</span><span class="sw__src">推导 · 过渡</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#2664ab"></span><span class="sw__meta"><b class="sw__name">--sea-500</b><span class="sw__hex">#2664ab</span><span class="sw__src"><b>实测</b> 海面 · 主色</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#3f7cc0"></span><span class="sw__meta"><b class="sw__name">--sea-400</b><span class="sw__hex">#3f7cc0</span><span class="sw__src">推导 · hover</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#5a8dc3"></span><span class="sw__meta"><b class="sw__name">--sea-300</b><span class="sw__hex">#5a8dc3</span><span class="sw__src"><b>实测</b> 天光</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#8fb4d6"></span><span class="sw__meta"><b class="sw__name">--sea-200</b><span class="sw__hex">#8fb4d6</span><span class="sw__src">推导 · 雾光</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#cfe0ef"></span><span class="sw__meta"><b class="sw__name">--sea-100</b><span class="sw__hex">#cfe0ef</span><span class="sw__src">推导 · 近白冷</span></span></div>
+    </div>
+
+    <h3 style="font-family:var(--font-mono);font-size:var(--fs-label);letter-spacing:.22em;color:var(--fg-faint);margin-bottom:var(--space-5)" data-reveal>身份色 · 暖光 · 高饱和</h3>
+    <div class="swatches" data-reveal>
+      <div class="sw"><span class="sw__chip" style="background:#055579"></span><span class="sw__meta"><b class="sw__name">--atri-700</b><span class="sw__hex">#055579</span><span class="sw__src"><b>实测</b> 领口最深</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#397f9d"></span><span class="sw__meta"><b class="sw__name">--atri-500</b><span class="sw__hex">#397f9d</span><span class="sw__src"><b>实测</b> 身份色 · 结构线</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#b64a59"></span><span class="sw__meta"><b class="sw__name">--ribbon-500</b><span class="sw__hex">#b64a59</span><span class="sw__src"><b>实测</b> 全站唯一高饱和</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#871c30"></span><span class="sw__meta"><b class="sw__name">--ribbon-600</b><span class="sw__hex">#871c30</span><span class="sw__src"><b>实测</b> 领巾暗部</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#fbe4cf"></span><span class="sw__meta"><b class="sw__name">--spark-core</b><span class="sw__hex">#fbe4cf</span><span class="sw__src"><b>实测</b> 火花芯 · 暖光主角</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#e8b98f"></span><span class="sw__meta"><b class="sw__name">--spark-glow</b><span class="sw__hex">#e8b98f</span><span class="sw__src">推导 · 暖光晕</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#be939b"></span><span class="sw__meta"><b class="sw__name">--spark-ember</b><span class="sw__hex">#be939b</span><span class="sw__src"><b>实测</b> 暖光均值</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#f9f9fa"></span><span class="sw__meta"><b class="sw__name">--foam</b><span class="sw__hex">#f9f9fa</span><span class="sw__src"><b>实测</b> 浪花白</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#fcfaf3"></span><span class="sw__meta"><b class="sw__name">--sail</b><span class="sw__hex">#fcfaf3</span><span class="sw__src"><b>实测</b> 主体白 · 正文色</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#b08e61"></span><span class="sw__meta"><b class="sw__name">--brass</b><span class="sw__hex">#b08e61</span><span class="sw__src"><b>实测</b> 铜扣 · 序号</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#546b77"></span><span class="sw__meta"><b class="sw__name">--mascot-dress</b><span class="sw__hex">#546b77</span><span class="sw__src">Q版 裙身沉青</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#decec2"></span><span class="sw__meta"><b class="sw__name">--mascot-flax</b><span class="sw__hex">#decec2</span><span class="sw__src">Q版 亚麻发</span></span></div>
+    </div>
+    <p class="sec__note" data-reveal>
+      注：标「推导」的色值由实测色在色相与明度上插值得到，用于补足过渡层级；标「实测」的色值直接取自参考图采样。
+    </p>
+
+    <div style="margin-top:var(--space-8);display:grid;gap:var(--space-5);max-width:44em" data-reveal>
+      <div class="callout callout--warn">
+        <div><div class="callout__title">暖光配额 · 6%~10%</div><div class="callout__text">每屏只能有一处暖色当"主角"：要么是光晕，要么是强调文字，要么是交互反馈。三者同时出现即视为超标。</div></div>
+      </div>
+      <div class="callout callout--danger">
+        <div><div class="callout__title">红色每屏 ≤ 1 处</div><div class="callout__text">领巾红是全站唯一的高饱和色。它出现的地方，就是这一屏唯一要你看的地方。</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="horizon horizon--dot" aria-hidden="true"><i></i></div>
+
+<!-- ══════════ 昼与夜 ══════════ -->
+<section id="daynight">
+  <div class="wrap">
+    <div class="sec__head" data-reveal>
+      <div class="sec__tag">02 / 昼夜</div>
+      <h2 class="sec__title">一条色相轴，两种极性</h2>
+      <p class="sec__desc">
+        站点跟随访客的本地时间。环境层（天与海）连续插值，语义层（字与底）在日出、日落两个时刻<b style="font-weight:700;color:var(--fg)">阶跃</b>翻转。
+        阶跃不是偷懒 —— 它是唯一能让正午也读得清的解法。把滑块拖到 <code>06:41</code>，看这一页怎么翻过去。
+      </p>
+    </div>
+
+    <div class="daybar" data-reveal style="margin-bottom:var(--space-8)">
+      <div class="daybar__top">
+        <span class="daybar__clock" id="dnClock">--:--</span>
+        <span class="pol" id="dnPol">夜晚</span>
+        <span class="daybar__live" id="dnLive">LIVE · LOCAL TIME</span>
+      </div>
+      <input type="range" id="dnSlider" min="0" max="24" step="0.05" value="21"
+             aria-label="时间轴（0 到 24 小时）">
+      <div class="rail" aria-hidden="true">
+        <div class="rail__band" id="dnBand" aria-hidden="true"><i></i><i></i></div>
+        <div class="rail__bars" id="dnBars"></div>
+        <div class="rail__switch" id="dnRise" data-label="日出翻转"></div>
+        <div class="rail__switch" id="dnSet" data-label="日落翻转"></div>
+        <div class="rail__now" id="dnNow"></div>
+      </div>
+      <div class="rail__axis" aria-hidden="true">
+        <span style="left:0%">00</span><span style="left:25%">06</span>
+        <span style="left:50%">12</span><span style="left:75%">18</span>
+        <span style="left:100%">24</span>
+      </div>
+      <div class="moments" id="dnMoments"></div>
+      <div class="daybar__foot">
+        <span id="dnRead">—</span>
+        <span id="dnPeak"></span>
+        <button class="btn btn--sm" id="dnFollow" style="margin-left:auto">跟随真实时间</button>
+      </div>
+    </div>
+
+    <h3 class="sec__sub" data-reveal>为什么白天必须反过来</h3>
+    <div class="grid grid--2" data-reveal style="margin-bottom:var(--space-8)">
+      <div class="panel"><div class="panel__body">
+        <div class="feature">
+          <span class="feature__idx">轴 · 色相</span>
+          <h4 class="feature__title">两根底色共用一根轴</h4>
+          <p class="feature__desc">
+            夜海 <code>#2664ab</code> 的色相是 254.3°，白天的海 <code>#1878d8</code> 是 253.6° ——
+            只差 <b style="font-weight:700;color:var(--fg)">−0.6°</b>。白天不是另画一套配色，是把同一根轴整体提亮。
+            地平线（−20.7°）与页面底色（−16.5°）也没有跑到别的颜色上去。
+          </p>
+        </div>
+        <div class="feature" style="margin-top:var(--space-6)">
+          <span class="feature__idx">极性 · 两种</span>
+          <h4 class="feature__title">深底浅字 / 浅底深字</h4>
+          <p class="feature__desc">
+            白天参考图是<b style="font-weight:700;color:var(--fg)">高调</b>的：66% 的像素亮度高于 0.35，平均色 <code>#7db0e2</code>。
+            “深底 + 白字，且每一层都 ≥ 5:1”在数学上就排除了高调背景 —— 所以白天只能是浅底深字。
+          </p>
+        </div>
+      </div></div>
+      <div class="panel panel--hero"><div class="panel__body">
+        <p style="font-size:var(--fs-h3);font-weight:700;line-height:1.6;margin-bottom:var(--space-4)">
+          同一根轴，两种极性。<br>中间没有第三条路。
+        </p>
+        <p style="color:var(--fg-muted);font-size:var(--fs-sm);margin-bottom:var(--space-5)">
+          两个锚点之间必然穿过一段“既不深也不浅”的地带。在那里白字和深字都够不到 4.5:1 ——
+          这不是调参能绕开的：
+        </p>
+        <div class="callout callout--danger" style="margin-bottom:var(--space-4)">
+          <div><div class="callout__title">死区：OKLCH L 0.558 – 0.686</div><div class="callout__text">二分实测，跨越它要 1–1.5 小时，恰好压在日出前后。白字最低 2.37:1、深字最低 2.72:1，两边都不及格。</div></div>
+        </div>
+        <div class="callout callout--warn">
+          <div><div class="callout__title">白天不能让海铺底</div><div class="callout__text">深字压在采样到的海色上只有 2.83–4.12:1。所以白天以<b style="font-weight:700;color:var(--fg)">天为底、以海为强调色</b>。</div></div>
+        </div>
+      </div></div>
+    </div>
+
+    <h3 class="sec__sub" data-reveal>晨昏：推导而不是猜</h3>
+    <div class="grid grid--2" data-reveal style="margin-bottom:var(--space-8)">
+      <div class="panel"><div class="panel__body">
+        <div class="feature">
+          <span class="feature__idx">规则</span>
+          <h4 class="feature__title">只改色相，不提亮</h4>
+          <p class="feature__desc">
+            拂晓与暮色不是平空想出来的：每一层的 <code>OKLCH L</code> <b style="font-weight:700;color:var(--fg)">直接继承</b>
+            「夜 ↔ 昼」基线在该时刻的取值，只把色相转到暖侧。因为 OKLab 的 L 就是感知明度，
+            同 L 换色相几乎不改变相对亮度 —— 于是加暖色不动到任何一条可读性结论。
+          </p>
+        </div>
+        <div class="feature" style="margin-top:var(--space-6)">
+          <span class="feature__idx">为什么不是全部铺成橘子色</span>
+          <h4 class="feature__title">暖色集中在地平线</h4>
+          <p class="feature__desc">
+            真实的日出日落就是「地平线暖、天顶冷」：太阳贴在海面上，光走得最长。
+            所以暖色落在 <code>skyHorizon</code> <code>glow</code> <code>light</code> 三层，
+            天顶反而偏紫，海面则反出暖褐色的倒影。
+          </p>
+        </div>
+      </div></div>
+      <div class="panel panel--hero"><div class="panel__body">
+        <p style="font-size:var(--fs-h3);font-weight:700;line-height:1.6;margin-bottom:var(--space-4)">
+          暖色可以随便加，<br>只要明度一豪不动。
+        </p>
+        <p style="color:var(--fg-muted);font-size:var(--fs-sm);margin-bottom:var(--space-5)">
+          实测对照：把拂晓与暮色的四个锚点插进去之前、之后各跑一遗严格体检（5 层底 × 辉光叠加 × 4 个令牌 × 每半小时），
+          两边结果<b style="font-weight:700;color:var(--fg)">逐字相同</b>。
+        </p>
+        <div class="callout" style="margin-bottom:var(--space-4)">
+          <div><div class="callout__title">推导 ≠ 编造</div><div class="callout__text">上一版的错误是<b style="font-weight:700;color:var(--fg)">用推理生成整个色盘</b>（包括正午），结果正午仍是深海军蓝。这次只推导晨昏两个时刻的<b style="font-weight:700;color:var(--fg)">色相</b>，明度全部沿用实测锚点。</div></div>
+        </div>
+        <div class="callout callout--warn">
+          <div><div class="callout__title">待补：晨昏的实测锚点</div><div class="callout__text">色相仍属推导。一旦有日出/日落的参考图，应当比照替换 —— 只需多两个锚点，插值逻辑不用改。</div></div>
+        </div>
+      </div></div>
+    </div>
+
+    <h3 class="sec__sub" data-reveal>晨昏锚点 · 推导</h3>
+    <div class="swatches" data-reveal style="margin-bottom:var(--space-3)">
+      <div class="sw"><span class="sw__chip" style="background:#242c4d"></span><span class="sw__meta"><b class="sw__name">拂晓 · skyTop</b><span class="sw__hex">#242c4d</span><span class="sw__src">推导 · 紫罗兰天顶</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#44375a"></span><span class="sw__meta"><b class="sw__name">拂晓 · skyMid</b><span class="sw__hex">#44375a</span><span class="sw__src">推导</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#9b3801"></span><span class="sw__meta"><b class="sw__name">拂晓 · skyHorizon</b><span class="sw__hex">#9b3801</span><span class="sw__src">推导 · 锈橙</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#a95601"></span><span class="sw__meta"><b class="sw__name">拂晓 · glow</b><span class="sw__hex">#a95601</span><span class="sw__src">推导 · 暗金</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#733f35"></span><span class="sw__meta"><b class="sw__name">拂晓 · seaNear</b><span class="sw__hex">#733f35</span><span class="sw__src">推导 · 暖褐倒影</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#f37f50"></span><span class="sw__meta"><b class="sw__name">日出 · skyHorizon</b><span class="sw__hex">#f37f50</span><span class="sw__src">推导 · 珊瑚橘</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#fb964b"></span><span class="sw__meta"><b class="sw__name">日出 · glow</b><span class="sw__hex">#fb964b</span><span class="sw__src">推导 · 金黄晨光</span></span></div>
+    </div>
+    <div class="swatches" data-reveal style="margin-bottom:var(--space-3)">
+      <div class="sw"><span class="sw__chip" style="background:#657398"></span><span class="sw__meta"><b class="sw__name">日落 · skyTop</b><span class="sw__hex">#657398</span><span class="sw__src">推导</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#9377a5"></span><span class="sw__meta"><b class="sw__name">日落 · skyMid</b><span class="sw__hex">#9377a5</span><span class="sw__src">推导 · 洋红</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#f16a57"></span><span class="sw__meta"><b class="sw__name">日落 · skyHorizon</b><span class="sw__hex">#f16a57</span><span class="sw__src">推导 · 橘红</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#ff7f5c"></span><span class="sw__meta"><b class="sw__name">日落 · glow</b><span class="sw__hex">#ff7f5c</span><span class="sw__src">推导 · 落日</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#b97673"></span><span class="sw__meta"><b class="sw__name">日落 · seaNear</b><span class="sw__hex">#b97673</span><span class="sw__src">推导 · 暖粉倒影</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#381f46"></span><span class="sw__meta"><b class="sw__name">暮色 · skyMid</b><span class="sw__hex">#381f46</span><span class="sw__src">推导 · 梅紫</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#900700"></span><span class="sw__meta"><b class="sw__name">暮色 · skyHorizon</b><span class="sw__hex">#900700</span><span class="sw__src">推导 · 余灬深红</span></span></div>
+    </div>
+    <p class="sec__note" style="margin-top:0;margin-bottom:var(--space-8);max-width:38em" data-reveal>
+      四个晨昏锚点对应的时刻：拂晓 <code>05:45</code>、日出 <code>06:30</code>、日落 <code>18:06</code>、暮色 <code>19:00</code>。
+      它们与两个实测锚点一起参与插值，于是清晨与傍晚是真的有橘子色了。
+    </p>
+
+    <h3 class="sec__sub" data-reveal>锚点实测 · 环境层</h3>
+    <div class="swatches" data-reveal style="margin-bottom:var(--space-3)">
+      <div class="sw"><span class="sw__chip" style="background:#070d18"></span><span class="sw__meta"><b class="sw__name">夜 · skyTop</b><span class="sw__hex">#070d18</span><span class="sw__src"><b>实测</b> 天顶</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#0d1b33"></span><span class="sw__meta"><b class="sw__name">夜 · skyMid</b><span class="sw__hex">#0d1b33</span><span class="sw__src"><b>实测</b> 天中</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#223a68"></span><span class="sw__meta"><b class="sw__name">夜 · skyHorizon</b><span class="sw__hex">#223a68</span><span class="sw__src"><b>实测</b> 地平线</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#142f5c"></span><span class="sw__meta"><b class="sw__name">夜 · seaNear</b><span class="sw__hex">#142f5c</span><span class="sw__src"><b>实测</b> 近海</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#0a1223"></span><span class="sw__meta"><b class="sw__name">夜 · seaDeep</b><span class="sw__hex">#0a1223</span><span class="sw__src">推导 · 深海</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#31507d"></span><span class="sw__meta"><b class="sw__name">夜 · glow</b><span class="sw__hex">#31507d</span><span class="sw__src"><b>实测</b> 地平线辉光</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#fbe4cf"></span><span class="sw__meta"><b class="sw__name">夜 · light</b><span class="sw__hex">#fbe4cf</span><span class="sw__src"><b>实测</b> 火花芯 · 暖光主角</span></span></div>
+    </div>
+    <div class="swatches" data-reveal style="margin-bottom:var(--space-3)">
+      <div class="sw"><span class="sw__chip" style="background:#96d0fd"></span><span class="sw__meta"><b class="sw__name">昼 · skyTop</b><span class="sw__hex">#96d0fd</span><span class="sw__src">推导 · 页面顶边</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#b7defc"></span><span class="sw__meta"><b class="sw__name">昼 · skyMid</b><span class="sw__hex">#b7defc</span><span class="sw__src"><b>实测</b> 天中</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#cbe8fd"></span><span class="sw__meta"><b class="sw__name">昼 · skyHorizon</b><span class="sw__hex">#cbe8fd</span><span class="sw__src"><b>实测</b> 地平线</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#a8d8fb"></span><span class="sw__meta"><b class="sw__name">昼 · seaNear</b><span class="sw__hex">#a8d8fb</span><span class="sw__src">推导 · 提亮到可铺底</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#d3eafd"></span><span class="sw__meta"><b class="sw__name">昼 · seaDeep</b><span class="sw__hex">#d3eafd</span><span class="sw__src">推导 · 深海</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#dff2fa"></span><span class="sw__meta"><b class="sw__name">昼 · glow</b><span class="sw__hex">#dff2fa</span><span class="sw__src"><b>实测</b> 太阳眩光</span></span></div>
+      <div class="sw"><span class="sw__chip" style="background:#edeffc"></span><span class="sw__meta"><b class="sw__name">昼 · light</b><span class="sw__hex">#edeffc</span><span class="sw__src"><b>实测</b> 过曝的冷白 · 不是琥珀</span></span></div>
+    </div>
+    <p class="sec__note" style="margin-top:0;margin-bottom:var(--space-8);max-width:38em" data-reveal>
+      另外两个真实采样值 <code>#1878d8</code>（白天海面）与 <code>#48a6fb</code>（白天天顶）
+      <b style="font-weight:700;color:var(--fg)">不进铺底层</b> —— 深字压在上面够不到底线。它们只作装饰与强调色出现在这一页里。
+    </p>
+
+    <h3 class="sec__sub" data-reveal>同一批令牌，两套取值</h3>
+    <div class="polpair" data-reveal style="margin-bottom:var(--space-8)">
+      <div class="polpair__head">
+        <div>语义令牌</div><div>夜 · NIGHT</div><div>昼 · DAY</div>
+      </div>
+      <div class="polpair__row">
+        <div class="polpair__k">--bg-base<em>页面底色</em></div>
+        <div class="polpair__v"><i class="polpair__chip" style="background:#0a1223"></i><span class="polpair__hex">#0a1223</span></div>
+        <div class="polpair__v"><i class="polpair__chip" style="background:#d3eafd"></i><span class="polpair__hex">#d3eafd</span></div>
+      </div>
+      <div class="polpair__row">
+        <div class="polpair__k">--bg-panel<em>面板底</em></div>
+        <div class="polpair__v"><i class="polpair__chip" style="background:rgba(20,47,92,.62)"></i><span class="polpair__hex">rgba(20,47,92,.62)</span></div>
+        <div class="polpair__v"><i class="polpair__chip" style="background:rgba(255,255,255,.62)"></i><span class="polpair__hex">rgba(255,255,255,.62)</span></div>
+      </div>
+      <div class="polpair__row">
+        <div class="polpair__k">--fg<em>正文</em></div>
+        <div class="polpair__v"><i class="polpair__chip" style="background:#fcfaf3"></i><span class="polpair__hex">#fcfaf3</span></div>
+        <div class="polpair__v"><i class="polpair__chip" style="background:#0e3557"></i><span class="polpair__hex">#0e3557</span></div>
+      </div>
+      <div class="polpair__row">
+        <div class="polpair__k">--fg-muted<em>次要文字</em></div>
+        <div class="polpair__v"><i class="polpair__chip" style="background:rgba(252,250,243,.68)"></i><span class="polpair__hex">rgba(252,250,243,.68)</span></div>
+        <div class="polpair__v"><i class="polpair__chip" style="background:#24486b"></i><span class="polpair__hex">#24486b</span></div>
+      </div>
+      <div class="polpair__row">
+        <div class="polpair__k">--fg-faint<em>辅助文字</em></div>
+        <div class="polpair__v"><i class="polpair__chip" style="background:rgba(252,250,243,.60)"></i><span class="polpair__hex">rgba(252,250,243,.60)</span></div>
+        <div class="polpair__v"><i class="polpair__chip" style="background:#35566b"></i><span class="polpair__hex">#35566b</span></div>
+      </div>
+      <div class="polpair__row">
+        <div class="polpair__k">--accent<em>强调 · 旧值 #397f9d 已修</em></div>
+        <div class="polpair__v"><i class="polpair__chip" style="background:#70b5d5"></i><span class="polpair__hex">#70b5d5</span></div>
+        <div class="polpair__v"><i class="polpair__chip" style="background:#0b4a7d"></i><span class="polpair__hex">#0b4a7d</span></div>
+      </div>
+      <div class="polpair__row">
+        <div class="polpair__k">--accent-warm<em>暖强调</em></div>
+        <div class="polpair__v"><i class="polpair__chip" style="background:#fbe4cf"></i><span class="polpair__hex">#fbe4cf</span></div>
+        <div class="polpair__v"><i class="polpair__chip" style="background:#7a4712"></i><span class="polpair__hex">#7a4712</span></div>
+      </div>
+      <div class="polpair__row">
+        <div class="polpair__k">--line-color<em>描边</em></div>
+        <div class="polpair__v"><i class="polpair__chip" style="background:rgba(252,250,243,.14)"></i><span class="polpair__hex">rgba(252,250,243,.14)</span></div>
+        <div class="polpair__v"><i class="polpair__chip" style="background:rgba(14,53,87,.16)"></i><span class="polpair__hex">rgba(14,53,87,.16)</span></div>
+      </div>
+      <div class="polpair__row polpair__row--frozen">
+        <div class="polpair__k">--bg-code<em>代码底</em></div>
+        <div class="polpair__v"><i class="polpair__chip" style="background:#070d18"></i><span class="polpair__hex">#070d18</span></div>
+        <div class="polpair__v"><i class="polpair__chip" style="background:#0b2c47"></i><span class="polpair__hex">#0b2c47</span></div>
+      </div>
+      <div class="polpair__row polpair__row--frozen">
+        <div class="polpair__k">--ribbon-500<em>红 · 品牌锚点</em></div>
+        <div class="polpair__v"><i class="polpair__chip" style="background:#b64a59"></i><span class="polpair__hex">#b64a59</span></div>
+        <div class="polpair__v"><i class="polpair__chip" style="background:#b64a59"></i><span class="polpair__hex">#b64a59</span></div>
+      </div>
+    </div>
+
+    <h3 class="sec__sub" data-reveal>死区：为什么不能用一条渐变混过去</h3>
+    <div class="deadfig" id="dnDeadFig" data-reveal style="margin-bottom:var(--space-6)"></div>
+    <div class="grid grid--3" data-reveal style="margin-bottom:var(--space-8)">
+      <div class="callout callout--danger">
+        <div><div class="callout__title">两条曲线在 4.5:1 下方交叉</div><div class="callout__text">白字曲线随底变亮而下滑，深字曲线随底变暗而下滑。它们在 <b style="font-weight:700;color:var(--fg)">L 0.558 – 0.686</b> 之间同时低于底线 —— 这一段无论写什么颜色的字都不合格。</div></div>
+      </div>
+      <div class="callout">
+        <div><div class="callout__title">解法：整页遮罩，厚度反解</div><div class="callout__text">遮罩不是面板专属，而是盖在<b style="font-weight:700;color:var(--fg)">环境层之上、全部内容之下</b>的一层。它的不透明度不写死，而是每帧解出「刚好让四个令牌全部达标」的最小值：该为零的时候为零，需要多厚就多厚。</div></div>
+      </div>
+      <div class="callout callout--warn">
+        <div><div class="callout__title">顶着上限的是 <code>--accent</code></div><div class="callout__text">峰值时刻若不加遮罩，四个令牌的实测最差分别是：<code>accent</code> 1.07、<code>faint</code> 1.67、<code>muted</code> 1.78、<code>fg</code> 2.33。青色强调与中间调的底几乎没有亮度差，它是真正的瓶颈。</div></div>
+      </div>
+    </div>
+
+    <div class="grid grid--2" data-reveal>
+      <div class="callout">
+        <div><div class="callout__title">插值必须用 OKLCH，但有一个例外</div><div class="callout__text">当两端彩度都很低时，<b style="font-weight:700;color:var(--fg)">色相是没有意义的</b>，可极坐标仍会按角度旋转，路径会穿过真实存在的绿色。实测：夜 → 昼，极坐标插值在中间得到一片苍绿 <code>#deede0</code>。规则：<code>min(C₁,C₂) &lt; 0.05</code> 时改用 OKLab 直角坐标插值。这条对极性的阶跃不适用 —— 阶跃不插值。</div></div>
+      </div>
+      <div class="callout">
+        <div><div class="callout__title">遮罩厚度是算出来的</div><div class="callout__text">翻转时刻取两条曲线的<b style="font-weight:700;color:var(--fg)">交点</b>（L=0.6195），此时两种极性一样差；遮罩则逐帧反解出最小厚度。整页遮罩盖着的时候换极性，于是观者只看到「天亮了」，不会看到「字糊了」。</div></div>
+      </div>
+      <div class="callout callout--warn">
+        <div><div class="callout__title">极性由本地时间决定，不读 prefers-color-scheme</div><div class="callout__text">这一页的昼夜是“现在几点”的呈现，不是用户的主题偏好。所以系统深色模式不会让页面变暗。可访问性另开一个显式开关，见 §11。</div></div>
+      </div>
+      <div class="callout callout--danger">
+        <div><div class="callout__title">不要靠加粗或阴影抢救对比度</div><div class="callout__text">那是掩盖问题。正确做法是换极性，或者——在翻转窗口里——把遮罩加厚。上面那张对照表里的每一个值都是<b style="font-weight:700;color:var(--fg)">量出来的</b>，不是估的。</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="horizon horizon--dot" aria-hidden="true"><i></i></div>
+
+<!-- ══════════ 字体 ══════════ -->
+<section id="type">
+  <div class="wrap">
+    <div class="sec__head" data-reveal>
+      <div class="sec__tag">03 / 字体</div>
+      <h2 class="sec__title">一个字族，全站通用</h2>
+      <p class="sec__desc">
+        只用江城圆体。它以 SIL OFL 1.1 授权，允许自由修改与子集化 —— 这一条决定了它能被自托管，
+        整套字体架构也因此压缩成「一套字体、一种交付方式」。
+      </p>
+    </div>
+
+    <div class="ffstatus ffstatus--warn" id="ffStatus" data-reveal style="margin-bottom:var(--space-6)">
+      <b>FONT</b><span id="ffText">正在检测字体…</span>
+    </div>
+
+    <h3 style="font-family:var(--font-mono);font-size:var(--fs-label);letter-spacing:.22em;color:var(--fg-faint);margin-bottom:var(--space-5)" data-reveal>分工</h3>
+    <div class="ff-roles" data-reveal style="margin-bottom:var(--space-8)">
+      <div class="ff-role">
+        <span class="tag tag--cyan">主字体</span>
+        <span class="ff-role__name"><b style="font-weight:700">江城圆体</b> <span style="color:var(--fg-muted)">· 21,632 汉字 · 6 字重 · 简繁双满分 · SIL OFL 1.1（可修改、可子集化）</span></span>
+        <span class="ff-role__note">自托管子集 WOFF2</span>
+      </div>
+      <div class="ff-role">
+        <span class="tag tag--ink">日文</span>
+        <span class="ff-role__name"><b style="font-weight:700">系统明朝体</b> <span style="color:var(--fg-muted)">· 江城圆体的假名是繁体中文语境字形，排不动「時よ止まれ」这首诗</span></span>
+        <span class="ff-role__note">零下载</span>
+      </div>
+    </div>
+
+    <h3 style="font-family:var(--font-mono);font-size:var(--fs-label);letter-spacing:.22em;color:var(--fg-faint);margin-bottom:var(--space-5)" data-reveal>为什么是圆体</h3>
+    <div class="grid grid--2" data-reveal style="margin-bottom:var(--space-8)">
+      <div class="panel"><div class="panel__body">
+        <div class="feature">
+          <span class="feature__idx">01</span>
+          <h4 class="feature__title">骨架是黑体，担得起正文</h4>
+          <p class="feature__desc">源自思源黑体，字面方正、重心稳定、笔画粗细均匀。它是「装饰后的黑体」，不是手写体 —— 这是它能承担全站信息的前提。</p>
+        </div>
+        <div class="feature" style="margin-top:var(--space-6)">
+          <span class="feature__idx">02</span>
+          <h4 class="feature__title">与三张素材同族</h4>
+          <p class="feature__desc">Q 版 Logo 是圆钝轮廓，水手服的领口是弧线，花火的光晕是圆形。圆体的笔端收圆，正好接住这三者。宋体是尖角，在这套素材里是唯一的外来者。</p>
+        </div>
+      </div></div>
+      <div class="panel"><div class="panel__body">
+        <div class="feature">
+          <span class="feature__idx">03</span>
+          <h4 class="feature__title">同时具备精度与柔软</h4>
+          <p class="feature__desc">黑体骨架给她「高性能」的一面，圆润笔端给她「少女」的一面。一个字族能同时承载这两面，比用两个字族拼接更统一。</p>
+        </div>
+        <div class="feature" style="margin-top:var(--space-6)">
+          <span class="feature__idx">04</span>
+          <h4 class="feature__title">与母本基调一致</h4>
+          <p class="feature__desc">这个故事的底色是温暖的、日常的、带一点哀感的夏日，不是冷峻的科幻。圆体读起来是「有人陪着你」，宋体读起来是「一段被记载的历史」。</p>
+        </div>
+      </div></div>
+    </div>
+
+    <h3 style="font-family:var(--font-mono);font-size:var(--fs-label);letter-spacing:.22em;color:var(--fg-faint);margin-bottom:var(--space-5)" data-reveal>字重轴 · 温度由字重承担</h3>
+    <p style="color:var(--fg-muted);font-size:var(--fs-sm);max-width:40em;margin-bottom:var(--space-5)" data-reveal>
+      删掉方圆字形对比之后，首屏标题的张力改由<b style="font-weight:700;color:var(--fg)">字重反差</b>建立。
+      代价是字重纪律必须被严格执行 —— 它是全站唯一的视觉重音。
+    </p>
+    <div class="weights" data-reveal style="margin-bottom:var(--space-8)">
+      <div class="weights__row">
+        <div class="weights__k">Light<em>300 · 仅吉祥物台词</em><i class="is-opt">可选</i></div>
+        <div class="weights__sample" style="font-weight:300;color:var(--mascot-flax)">哼哼，毕竟我是高性能的嘛！</div>
+      </div>
+      <div class="weights__row">
+        <div class="weights__k">Regular<em>400 · 正文</em><i>首版加载</i></div>
+        <div class="weights__sample" style="font-weight:400">短期记忆是每个群独立的滑动上下文窗口。</div>
+      </div>
+      <div class="weights__row weights__row--no">
+        <div class="weights__k">Medium<em>500 · 与 400/700 无差异</em><i class="is-no">不用</i></div>
+        <div class="weights__sample" style="font-weight:500">两级记忆系统</div>
+      </div>
+      <div class="weights__row">
+        <div class="weights__k">Bold<em>700 · 全部标题</em><i>首版加载</i></div>
+        <div class="weights__sample" style="font-weight:700">核心功能</div>
+      </div>
+      <div class="weights__axis">
+        <span>← 柔软 · 少女之声</span>
+        <span>结构 · 全站唯一的视觉重音 →</span>
+      </div>
+    </div>
+
+    <h3 style="font-family:var(--font-mono);font-size:var(--fs-label);letter-spacing:.22em;color:var(--fg-faint);margin-bottom:var(--space-5)" data-reveal>字阶</h3>
+    <div class="scale">
+      <div class="scale__row" data-reveal>
+        <div class="scale__key">--fs-hero<em>clamp(40,7vw,84) · 700</em></div>
+        <div style="font-family:var(--font-display);font-weight:700;font-size:var(--fs-hero);line-height:1.06;letter-spacing:.04em">亚托莉</div>
+      </div>
+      <div class="scale__row" data-reveal>
+        <div class="scale__key">--fs-h1<em>clamp(30,4.2vw,50) · 700</em></div>
+        <div style="font-family:var(--font-display);font-weight:700;font-size:var(--fs-h1);line-height:1.18;letter-spacing:.02em">核心功能</div>
+      </div>
+      <div class="scale__row" data-reveal>
+        <div class="scale__key">--fs-h2<em>clamp(22,2.6vw,32) · 700</em></div>
+        <div style="font-family:var(--font-display);font-weight:700;font-size:var(--fs-h2);line-height:1.30">两级记忆系统</div>
+      </div>
+      <div class="scale__row" data-reveal>
+        <div class="scale__key">--fs-h3<em>19px · 700</em></div>
+        <div style="font-weight:700;font-size:var(--fs-h3);letter-spacing:.01em">混合检索：向量 + 全文双路召回</div>
+      </div>
+      <div class="scale__row" data-reveal>
+        <div class="scale__key">--fs-body<em>16px / lh 1.90</em></div>
+        <div style="color:var(--fg-muted);max-width:34em">短期记忆是每个群独立的滑动上下文窗口，超限时由模型压缩成摘要再续接；长期记忆落在 PostgreSQL 的 pgvector 上，配合 pgroonga 做全文检索。</div>
+      </div>
+      <div class="scale__row" data-reveal>
+        <div class="scale__key">--fs-label<em>mono / .22em</em></div>
+        <div style="font-family:var(--font-mono);font-size:var(--fs-label);letter-spacing:.22em;color:var(--accent)">01 / FEATURES</div>
+      </div>
+      <div class="scale__row" data-reveal>
+        <div class="scale__key">--fs-code<em>13.5px / mono</em></div>
+        <div style="font-family:var(--font-mono);font-size:var(--fs-code)">@ATRI-bot /help --list</div>
+      </div>
+    </div>
+
+    <div style="margin-top:var(--space-8);display:grid;gap:var(--space-4);max-width:46em" data-reveal>
+      <div class="callout">
+        <div><div class="callout__title">决策记录：为什么不用方圆体</div><div class="callout__text">它的 <b>BEVL</b> 轴（方↔圆）在视觉上很合适，但许可为「作者声明」而非 OFL：<b style="color:var(--fg)">明文禁止</b>对字体拆分、修改、二次创作，而转 WOFF2 子集恰好落在这一条上。也不得用于商标，且必须标注版权人。改用单一字族是<b style="color:var(--fg)">简化</b>，不是牺牲。</div></div>
+      </div>
+      <div class="callout callout--warn">
+        <div><div class="callout__title">江城圆体：作者不建议用于正文</div><div class="callout__text">起因是行高与部分标点宽度。本规范把正文行长压到 34em、行高 1.90 来规避；若实际观感仍不佳，正文单独切回系统黑体即可。</div></div>
+      </div>
+      <div class="callout callout--warn">
+        <div><div class="callout__title">改文案后必须重新子集化</div><div class="callout__text">否则新增的字会静默回退成系统字体（不报错，但不一致）。子集化时必须保留标点、数字、字母与 <code>© · → ↔ ✓</code> 等符号。</div></div>
+      </div>
+      <div class="callout">
+        <div><div class="callout__title">字距铁律</div><div class="callout__text">拉丁/等宽小标签用大字距（.18em~.24em），中文正文用小字距（.02em）。两者绝不互相套用。</div></div>
+      </div>
+      <div class="callout">
+        <div><div class="callout__title">行长上限</div><div class="callout__text">中文正文每行不超过 34 个全角字（max-width: 34em）。超过 40em 必须分栏。</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="horizon horizon--dot" aria-hidden="true"><i></i></div>
+
+<!-- ══════════ 形状与间距 ══════════ -->
+<section id="shape">
+  <div class="wrap">
+    <div class="sec__head" data-reveal>
+      <div class="sec__tag">04 / 形状 · 间距 · 光影</div>
+      <h2 class="sec__title">硬边矩形，与一次 V 形切角</h2>
+      <p class="sec__desc">
+        圆钝胶囊只属于 Q 版吉祥物声部。少女声部一律硬边：1px 发丝线、2px 圆角、
+        以及来自水手领的 V 形切角（每屏 ≤ 3 处）。
+      </p>
+    </div>
+
+    <div class="shape-demo" data-reveal style="margin-bottom:var(--space-8)">
+      <div class="shape">--r-0 直角</div>
+      <div class="shape shape--r2">--r-2 卡片</div>
+      <div class="shape shape--cut">V 形切角 18px</div>
+      <div class="shape shape--pill">胶囊 · 仅吉祥物</div>
+    </div>
+
+    <div class="bars" data-reveal style="margin-bottom:var(--space-8);max-width:520px">
+      <div class="bar"><span class="bar__k">--space-1</span><span class="bar__v" style="width:4px"></span><span class="bar__n">4px</span></div>
+      <div class="bar"><span class="bar__k">--space-2</span><span class="bar__v" style="width:8px"></span><span class="bar__n">8px</span></div>
+      <div class="bar"><span class="bar__k">--space-3</span><span class="bar__v" style="width:12px"></span><span class="bar__n">12px</span></div>
+      <div class="bar"><span class="bar__k">--space-4</span><span class="bar__v" style="width:16px"></span><span class="bar__n">16px</span></div>
+      <div class="bar"><span class="bar__k">--space-5</span><span class="bar__v" style="width:24px"></span><span class="bar__n">24px · 卡片间距</span></div>
+      <div class="bar"><span class="bar__k">--space-6</span><span class="bar__v" style="width:32px"></span><span class="bar__n">32px · 卡片内边距</span></div>
+      <div class="bar"><span class="bar__k">--space-7</span><span class="bar__v" style="width:48px"></span><span class="bar__n">48px</span></div>
+      <div class="bar"><span class="bar__k">--space-8</span><span class="bar__v" style="width:64px"></span><span class="bar__n">64px · 标题→内容</span></div>
+      <div class="bar"><span class="bar__k">--space-9</span><span class="bar__v" style="width:96px"></span><span class="bar__n">96px</span></div>
+    </div>
+
+    <div class="shadow-demo" data-reveal>
+      <div>1px 发丝线<br><span style="color:var(--accent)">默认层次</span></div>
+      <div class="s2">--glow-cold</div>
+      <div class="s3">--glow-warm</div>
+      <div class="s4">--shadow-deep</div>
+    </div>
+    <p class="sec__note" data-reveal>
+      卡片不用大模糊投影来"浮起来"。层次靠 1px 发丝线 + 极低饱和内发光 + 底色深浅差；投影只留给模态与浮层。
+    </p>
+  </div>
+</section>
+
+<div class="horizon horizon--dot" aria-hidden="true"><i></i></div>
+
+<!-- ══════════ 组件 ══════════ -->
+<section id="parts">
+  <div class="wrap">
+    <div class="sec__head" data-reveal>
+      <div class="sec__tag">05 / 组件</div>
+      <h2 class="sec__title">组件库</h2>
+      <p class="sec__desc">以下为 v0.7 的全部基础组件。所有组件只允许使用语义层令牌，禁止直接引用原始色阶。</p>
+    </div>
+
+    <!-- 按钮 -->
+    <h3 style="font-family:var(--font-mono);font-size:var(--fs-label);letter-spacing:.22em;color:var(--fg-faint);margin-bottom:var(--space-5)" data-reveal>按钮 · 每屏最多一个暖白实心</h3>
+    <div class="spec-row" data-reveal style="margin-bottom:var(--space-8);align-items:center">
+      <a class="btn btn--solid">暖白实心</a>
+      <a class="btn">线框 · 默认</a>
+      <a class="btn btn--sm">小尺寸</a>
+      <a class="btn" disabled>禁用态</a>
+      <a class="btn btn--ghost"><span>幽灵按钮</span></a>
+    </div>
+
+    <!-- 标签 -->
+    <h3 style="font-family:var(--font-mono);font-size:var(--fs-label);letter-spacing:.22em;color:var(--fg-faint);margin-bottom:var(--space-5)" data-reveal>标签 · 左上角 8px 切角</h3>
+    <div class="tagrow" data-reveal style="margin-bottom:var(--space-8)">
+      <span class="tag tag--ink">Python 3.14</span>
+      <span class="tag tag--ink">PostgreSQL</span>
+      <span class="tag tag--ink">pgvector</span>
+      <span class="tag tag--ink">pgroonga</span>
+      <span class="tag tag--ink">MCP</span>
+      <span class="tag tag--cyan">Docker</span>
+      <span class="tag tag--warm">Beta</span>
+      <span class="tag tag--alert">已废弃</span>
+    </div>
+
+    <!-- 面板 + 功能条目 -->
+    <h3 style="font-family:var(--font-mono);font-size:var(--fs-label);letter-spacing:.22em;color:var(--fg-faint);margin-bottom:var(--space-5)" data-reveal>面板与功能条目 · 序号就是图标</h3>
+    <div class="grid grid--2" style="margin-bottom:var(--space-8)">
+      <div class="panel panel--hero" data-reveal>
+        <div class="panel__body">
+          <div class="sec__tag" style="margin-bottom:var(--space-4)">panel--hero</div>
+          <p style="color:var(--fg-muted);font-size:var(--fs-sm)">
+            首屏主面板，底色更亮一档并带冷辉。V 形切角位于左上与右下，呼应水手领的 V。
+          </p>
+        </div>
+      </div>
+      <div class="panel panel--lift" data-reveal data-delay="1">
+        <div class="panel__body">
+          <div class="feature">
+            <span class="feature__idx">01</span>
+            <h4 class="feature__title">两级记忆系统</h4>
+            <p class="feature__desc">短期滑动上下文由模型自动压缩，长期记忆经向量化后存入 pgvector，检索时向量与全文双路召回并用 RRF 融合。</p>
+          </div>
+          <div class="feature" style="margin-top:var(--space-6)">
+            <span class="feature__idx">02</span>
+            <h4 class="feature__title">结构化决策输出</h4>
+            <p class="feature__desc">模型以 JSON 返回 speak / update / silence 三种决策，工具调用通过 Function Calling 循环执行，行为完全可控。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 代码块 -->
+    <h3 style="font-family:var(--font-mono);font-size:var(--fs-label);letter-spacing:.22em;color:var(--fg-faint);margin-bottom:var(--space-5)" data-reveal>代码块 · 比页面更深，像水面下</h3>
+    <div class="grid grid--2" style="margin-bottom:var(--space-8)">
+      <div class="code" data-reveal>
+        <div class="code__bar"><span class="code__dot" aria-hidden="true"></span><span class="code__lang">BASH</span><button class="code__copy" data-copy="uv run main.py">复制</button></div>
+<pre><span class="tk-c"># 从项目根目录启动，路径解析依赖工作目录</span>
+<span class="tk-p">$</span> <span class="tk-s">uv run main.py</span></pre>
+      </div>
+      <div class="code" data-reveal data-delay="1">
+        <div class="code__bar"><span class="code__dot" aria-hidden="true"></span><span class="code__lang">JSON</span><button class="code__copy" data-copy="{ &quot;mcpServers&quot;: { &quot;server_name&quot;: { &quot;command&quot;: &quot;uvx&quot;, &quot;active&quot;: true } } }">复制</button></div>
+<pre><span class="tk-p">{</span>
+  <span class="tk-s">"mcpServers"</span><span class="tk-p">: {</span>
+    <span class="tk-s">"server_name"</span><span class="tk-p">: {</span>
+      <span class="tk-s">"command"</span><span class="tk-p">:</span> <span class="tk-k">"uvx"</span><span class="tk-p">,</span>
+      <span class="tk-s">"active"</span><span class="tk-p">:</span> <span class="tk-k">true</span>
+    <span class="tk-p">}</span>
+  <span class="tk-p">}</span>
+<span class="tk-p">}</span></pre>
+      </div>
+    </div>
+
+    <!-- 表格 -->
+    <h3 style="font-family:var(--font-mono);font-size:var(--fs-label);letter-spacing:.22em;color:var(--fg-faint);margin-bottom:var(--space-5)" data-reveal>命令行表 · 无斑马纹，靠 1px 线分行</h3>
+    <div class="panel panel--plain" data-reveal style="margin-bottom:var(--space-8)">
+      <div class="panel__body" style="padding:var(--space-5) var(--space-4)">
+        <table>
+          <thead><tr><th>命令</th><th>参数</th><th>权限</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td class="cmd">/help</td><td class="arg">--list</td><td><span class="tag tag--ink">1</span></td><td class="dim">列出全部命令</td></tr>
+            <tr><td class="cmd">/reload</td><td class="arg">—</td><td><span class="tag tag--cyan">3</span></td><td class="dim">热重载命令模块</td></tr>
+            <tr><td class="cmd">/memory</td><td class="arg">--category fact</td><td><span class="tag tag--ink">1</span></td><td class="dim">按分类检索长期记忆</td></tr>
+            <tr><td class="cmd">/ban</td><td class="arg">-u &lt;qq&gt; -t 1800</td><td><span class="tag tag--cyan">2</span></td><td class="dim">禁言指定群成员</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 提示条 -->
+    <h3 style="font-family:var(--font-mono);font-size:var(--fs-label);letter-spacing:.22em;color:var(--fg-faint);margin-bottom:var(--space-5)" data-reveal>提示条 · 左侧 3px 竖条，无底色</h3>
+    <div class="grid grid--2" style="margin-bottom:var(--space-8)" data-reveal>
+      <div class="callout"><div><div class="callout__title">note · 补充说明</div><div class="callout__text">数据库需要同时安装 pgvector 与 pgroonga 扩展。</div></div></div>
+      <div class="callout callout--tip"><div><div class="callout__title">tip · 计入暖光配额</div><div class="callout__text">可以在 <code>assets/config.json</code> 里调整备用模型顺序。</div></div></div>
+      <div class="callout callout--warn"><div><div class="callout__title">warn · 需要注意</div><div class="callout__text">沙盒初始化失败不会阻断启动，使用前请先检查它是否存在。</div></div></div>
+      <div class="callout callout--danger"><div><div class="callout__title">danger · 计入红配额</div><div class="callout__text">执行后会清空当前群的短期上下文，且无法撤销。</div></div></div>
+    </div>
+
+    <!-- 流程 -->
+    <h3 style="font-family:var(--font-mono);font-size:var(--fs-label);letter-spacing:.22em;color:var(--fg-faint);margin-bottom:var(--space-5)" data-reveal>流程 / 时间线 · 实心必经，空心异步，铜色落库</h3>
+    <div class="grid grid--2" data-reveal>
+      <div class="panel"><div class="panel__body">
+        <div class="flow">
+          <div class="flow__item"><div class="flow__t">NapCat 接入</div><div class="flow__d">外部 QQ → OneBot 事件</div></div>
+          <div class="flow__item"><div class="flow__t">平台适配器</div><div class="flow__d">WebSocket client / server · HTTP</div></div>
+          <div class="flow__item"><div class="flow__t">MessageQueue → Pipeline</div><div class="flow__d">WhitelistMiddleware 群白名单过滤</div></div>
+          <div class="flow__item flow__item--db"><div class="flow__t">EventBus 按 PostType 分发</div><div class="flow__d">消息落库 message 表</div></div>
+          <div class="flow__item"><div class="flow__t">命令路由 / 聊天路由</div><div class="flow__d">AtCommandRule priority=10 · initiativeChat priority=100</div></div>
+          <div class="flow__item flow__item--opt"><div class="flow__t">插件 handlers</div><div class="flow__d">可选：消息 / 通知 / 请求 / 元事件</div></div>
+        </div>
+      </div></div>
+      <div class="panel"><div class="panel__body">
+        <div class="sec__tag" style="margin-bottom:var(--space-5)">节点图例</div>
+        <div class="flow">
+          <div class="flow__item"><div class="flow__t">实心青点</div><div class="flow__d">必经步骤（同步链路）</div></div>
+          <div class="flow__item flow__item--opt"><div class="flow__t">空心青点</div><div class="flow__d">可选 / 异步 / 条件触发</div></div>
+          <div class="flow__item flow__item--db"><div class="flow__t">铜色实点</div><div class="flow__d">数据落库</div></div>
+        </div>
+        <p class="sec__note" style="margin-top:var(--space-5)">不用箭头图标，方向由连线与顺序表达。所有节点文字使用 <code>--fs-sm</code> 与 <code>11.5px mono</code>。</p>
+      </div></div>
+    </div>
+  </div>
+</section>
+
+<div class="horizon horizon--dot" aria-hidden="true"><i></i></div>
+
+<!-- ══════════ 状态态 ══════════ -->
+<section id="states">
+  <div class="wrap">
+    <div class="sec__head" data-reveal>
+      <div class="sec__tag">06 / 吉祥物声部</div>
+      <h2 class="sec__title">只有当事情不顺，她才出来说话</h2>
+      <p class="sec__desc">
+        Q 版形象、圆钝轮廓、粗描线 —— 这套画法只用于加载、空状态、错误与彩蛋。
+        功能卡片里永远不出现 Q 版头像，那是少女声部的地盘。
+      </p>
+    </div>
+
+    <div class="states">
+      <div class="state" data-reveal>
+        <span class="state__k">LOADING</span>
+        <img src="ATRI-bot-1k.png" alt="">
+        <p class="state__voice">稍等一下哦…我正在努力。</p>
+      </div>
+      <div class="state state--tilt" data-reveal data-delay="1">
+        <span class="state__k">EMPTY</span>
+        <img src="ATRI-bot-1k.png" alt="">
+        <p class="state__voice">这里好像什么都没有…要回到首页看看吗？</p>
+      </div>
+      <div class="state state--dim" data-reveal data-delay="2">
+        <span class="state__k">ERROR</span>
+        <img src="ATRI-bot-1k.png" alt="">
+        <p class="state__voice">呜…好像出故障了。要再试一次吗？</p>
+      </div>
+      <div class="state" data-reveal data-delay="2">
+        <span class="state__k">EASTER EGG</span>
+        <img src="ATRI-bot-1k.png" alt="">
+        <p class="state__voice">哼哼，毕竟我是高性能的嘛！</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="horizon horizon--dot" aria-hidden="true"><i></i></div>
+
+<!-- ══════════ 动效 ══════════ -->
+<section id="motion">
+  <div class="wrap">
+    <div class="sec__head" data-reveal>
+      <div class="sec__tag">07 / 动效</div>
+      <h2 class="sec__title">盯着看 5 秒，先注意到内容</h2>
+      <p class="sec__desc">
+        签名缓动是 cubic-bezier(.22,.61,.30,1) —— 柔、慢、绝不回弹。
+        带 overshoot 的弹性曲线会让页面变成"产品发布会"，与参考图的柔焦慢调冲突。
+      </p>
+    </div>
+
+    <div class="motion-demo" style="margin-bottom:var(--space-8)">
+      <div class="panel" data-reveal><div class="panel__body">
+        <div class="sec__tag" style="margin-bottom:var(--space-5)">水面倒影 · 招牌交互</div>
+        <div class="reflect-stage">
+          <span class="reflect-stage__word">
+            亚托莉
+            <span class="reflect-stage__mirror" aria-hidden="true">亚托莉</span>
+          </span>
+          <div class="reflect-stage__line" aria-hidden="true"></div>
+        </div>
+        <p class="sec__note" style="margin-top:0">
+          mask 方向很关键：元素被 scaleY(-1) 翻转后，其局部底部在视觉上位于上方，
+          所以 mask 必须让局部底部不透明（to bottom: transparent → opaque）。
+          没有下方那条海平线，倒影就失去了物理依据。
+        </p>
+      </div></div>
+
+      <div class="panel" data-reveal data-delay="1"><div class="panel__body">
+        <div class="sec__tag" style="margin-bottom:var(--space-5)">动效令牌</div>
+        <ul class="motion-list">
+          <li><b>--dur-1</b><span>120ms · 微反馈（颜色、透明度）</span></li>
+          <li><b>--dur-2</b><span>240ms · 状态切换（hover、focus）</span></li>
+          <li><b>--dur-3</b><span>480ms · 元素入场</span></li>
+          <li><b>--dur-4</b><span>900ms · 区块级转场</span></li>
+          <li><b>--dur-idle</b><span>18s · 待机动效周期（16~30s）</span></li>
+          <li><b>--ease-sea</b><span>签名缓动，无回弹</span></li>
+        </ul>
+        <p class="sec__note">
+          唯一允许周期短于 16s 的是暖光呼吸（4.5~6s）—— 因为它是光源本身。
+        </p>
+      </div></div>
+    </div>
+
+    <h3 style="font-family:var(--font-mono);font-size:var(--fs-label);letter-spacing:.22em;color:var(--fg-faint);margin-bottom:var(--space-5)" data-reveal>待机动效清单</h3>
+    <div class="panel panel--plain" data-reveal style="margin-bottom:var(--space-8)">
+      <div class="panel__body" style="padding:var(--space-5) var(--space-4)">
+        <table>
+          <thead><tr><th>元素</th><th>动效</th><th>周期</th><th>幅度</th></tr></thead>
+          <tbody>
+            <tr><td class="dim">波浪（背景层）</td><td class="dim">横向位移</td><td class="arg">≥ 16s</td><td class="arg">0.6% ~ 1.2%</td></tr>
+            <tr><td class="dim">火花光斑</td><td class="dim">呼吸</td><td class="arg">4.5 ~ 6s</td><td class="arg">opacity ±18%</td></tr>
+            <tr><td class="dim">吉祥物挂件</td><td class="dim">呼吸</td><td class="arg">6s</td><td class="arg">scale 1 → 1.012</td></tr>
+            <tr><td class="dim">立绘</td><td class="dim">上下漂浮</td><td class="arg">≥ 20s</td><td class="arg">±6px</td></tr>
+            <tr><td class="dim">星点</td><td class="dim">亮度</td><td class="arg">≥ 24s</td><td class="arg">opacity ±10%</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="callout callout--danger" data-reveal>
+      <div><div class="callout__title">反面清单</div><div class="callout__text">
+        大圆角毛玻璃卡 · 紫粉渐变 · emoji 当图标 · 弹性回弹曲线 · 滚动视差 &gt; 8% · 同屏两处红色 ·
+        Q 版头像进功能卡 · 自动播放与打字机特效 · 任何 &gt; 3Hz 的闪烁。
+      </div></div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ══════════ 页脚 ══════════ -->
+<footer class="footer">
+  <hr class="horizon">
+  <div class="wrap">
+    <div class="footer__grid">
+      <div>
+        <div class="footer__brand">
+          <img src="ATRI-bot-1k.png" alt="">
+          <span>ATRI-bot</span>
+        </div>
+        <p class="footer__kana" lang="ja">時よ止まれ、おまえは美しい</p>
+        <div class="footer__mirror-wrap" aria-hidden="true">
+          <img src="ATRI-bot-1k.png" alt="">
+        </div>
+      </div>
+      <div class="footer__col">
+        <h4>项目</h4>
+        <ul>
+          <li><a href="https://github.com/114514ggb/ATRI-bot" target="_blank" rel="noopener">GitHub 仓库</a></li>
+          <li><a href="#parts">快速开始</a></li>
+          <li><a href="#">MIT License</a></li>
+        </ul>
+      </div>
+      <div class="footer__col">
+        <h4>生态</h4>
+        <ul>
+          <li><a href="https://github.com/NapNeko/NapCatQQ" target="_blank" rel="noopener">NapCat</a></li>
+          <li><a href="https://www.postgresql.org/" target="_blank" rel="noopener">PostgreSQL</a></li>
+          <li><a href="https://github.com/pgvector/pgvector" target="_blank" rel="noopener">pgvector</a></li>
+          <li><a href="https://pgroonga.github.io/" target="_blank" rel="noopener">pgroonga</a></li>
+        </ul>
+      </div>
+      <div class="footer__col">
+        <h4>关于</h4>
+        <ul>
+          <li><a href="#">Logo 由 吖密 绘制</a></li>
+          <li><a href="#top">视觉设计规范 v0.7</a></li>
+          <li><a href="#">参与贡献</a></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <hr class="horizon">
+  <div class="wrap">
+    <div class="footer__bottom">
+      <span>MIT LICENSE · © 2026 ATRI-BOT</span>
+      <span>字体：江城圆体 © 刘鹏（SIL OFL 1.1）</span>
+      <span>视觉设计规范 v0.7 · 草稿</span>
+    </div>
+  </div>
+</footer>
+
+<!-- ══════════ 吉祥物挂件 ══════════ -->
+<div class="mascot" id="mascot">
+  <div class="mascot__bubble" id="mascotBubble" role="status">
+    <button class="mascot__close" id="mascotClose" aria-label="关闭">×</button>
+    <span id="mascotText">哼哼，毕竟我是高性能的嘛！</span>
+  </div>
+  <button class="mascot__btn" id="mascotBtn" aria-label="亚托莉">
+    <img src="ATRI-bot-1k.png" alt="">
+  </button>
+</div>
+
+<script>
+(function(){
+  'use strict';
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ── 导航：滚动加背景 + 当前项高亮 ── */
+  var nav = document.getElementById('siteNav');
+  var links = Array.prototype.slice.call(document.querySelectorAll('.nav__link'));
+  var sections = links.map(function(a){
+    return document.querySelector(a.getAttribute('href'));
+  }).filter(Boolean);
+
+  function onScroll(){
+    nav.classList.toggle('solid', window.scrollY > 24);
+    if (reduce) return;
+    var y = window.scrollY + 120, current = sections[0];
+    sections.forEach(function(s){ if (s.offsetTop <= y) current = s; });
+    links.forEach(function(a){
+      a.classList.toggle('is-active', a.getAttribute('href') === '#' + current.id);
+    });
+  }
+  window.addEventListener('scroll', onScroll, {passive:true});
+  onScroll();
+
+  /* ── 滚动入场 ── */
+  var revealables = document.querySelectorAll('[data-reveal]');
+  if (!('IntersectionObserver' in window) || reduce) {
+    Array.prototype.forEach.call(revealables, function(el){ el.classList.add('in'); });
+  } else {
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+      });
+    }, {threshold:0.16, rootMargin:'0px 0px -8% 0px'});
+    Array.prototype.forEach.call(revealables, function(el){ io.observe(el); });
+  }
+
+  /* ── 网格叠加（G 键） ── */
+  var overlay = document.getElementById('gridOverlay');
+  var gridBtn = document.getElementById('gridBtn');
+  function toggleGrid(){ overlay.classList.toggle('on'); }
+  gridBtn.addEventListener('click', toggleGrid);
+  window.addEventListener('keydown', function(e){
+    if (e.key === 'g' || e.key === 'G') {
+      if (document.activeElement && /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+      toggleGrid();
+    }
+  });
+
+  /* ── 字体可用性检测（江城圆体） ── */
+  (function(){
+    var textEl = document.getElementById('ffText');
+    var box = document.getElementById('ffStatus');
+    if (!textEl || !box) return;
+    function usable(family){
+      try {
+        var probe = '汉漢字测试ABC123@';
+        var ctx = document.createElement('canvas').getContext('2d');
+        ctx.font = '32px monospace';
+        var base = ctx.measureText(probe).width;
+        ctx.font = '32px "' + family + '", monospace';
+        return Math.abs(ctx.measureText(probe).width - base) > 0.5;
+      } catch (e) { return false; }
+    }
+    function report(){
+      var jc = usable('JiangCheng Yuan') || usable('江城圆体');
+      var msg = '江城圆体 ' + (jc ? '✓' : '✗') + '　';
+      msg += jc
+        ? '当前显示的是真实字形。'
+        : '未检测到江城圆体，已回退到系统黑体 —— 观感会有差异。把 woff2 放进 web/assets/fonts/ 并启用 §3.2.5 的自托管声明即可。';
+      textEl.textContent = msg;
+      box.classList.toggle('ffstatus--ok', jc);
+      box.classList.toggle('ffstatus--warn', !jc);
+    }
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(report, report);
+    } else { report(); }
+  })();
+
+  /* ── 代码复制 ── */
+  Array.prototype.forEach.call(document.querySelectorAll('.code__copy'), function(btn){
+    btn.addEventListener('click', function(){
+      var text = btn.getAttribute('data-copy') || '';
+      var done = function(){ btn.textContent = '复制好了！'; setTimeout(function(){ btn.textContent = '复制'; }, 1600); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, done);
+      } else { done(); }
+    });
+  });
+
+  /* ── 吉祥物挂件 ── */
+  var mascot = document.getElementById('mascot');
+  var bubble = document.getElementById('mascotBubble');
+  var textEl = document.getElementById('mascotText');
+  var btn = document.getElementById('mascotBtn');
+  var closeBtn = document.getElementById('mascotClose');
+  var lines = [
+    '哼，这个页面是照着夜里的海做的哦。',
+    '有不懂的地方，请尽管吩咐我！',
+    '好看就是高兴…大概是这种感觉吧？',
+    '颜色我可是一个一个量过的，毕竟我是高性能的嘛！',
+    '红色一次只准出现一处…这是规矩。'
+  ];
+  var recent = [], timer = null, hidden = false;
+
+  function pick(){
+    var pool = lines.filter(function(l){ return recent.indexOf(l) === -1; });
+    if (!pool.length) { recent = []; pool = lines.slice(); }
+    var line = pool[Math.floor(Math.random() * pool.length)];
+    recent.push(line);
+    if (recent.length > 3) recent.shift();
+    return line;
+  }
+  function show(){
+    textEl.textContent = pick();
+    mascot.classList.add('on');
+    clearTimeout(timer);
+    timer = setTimeout(hide, 3000);
+  }
+  function hide(){ mascot.classList.remove('on'); }
+
+  btn.addEventListener('click', function(){ hidden ? null : show(); });
+  btn.addEventListener('mouseenter', function(){ if (!reduce) show(); });
+  closeBtn.addEventListener('click', function(e){
+    e.stopPropagation(); hide(); hidden = true;
+    try { localStorage.setItem('atri_mascot_closed','1'); } catch(_) {}
+  });
+  try { if (localStorage.getItem('atri_mascot_closed')) hidden = true; } catch(_) {}
+
+  setTimeout(function(){ if (!hidden && !reduce) show(); }, 2600);
+
+  /* ── 昼夜控制台（§3.8）─────────────────────────────── */
+  (function(){
+    var T = window.__atriTime;
+    if (!T) return;
+    var $ = function(id){ return document.getElementById(id); };
+    var clock = $('dnClock'), pol = $('dnPol'), live = $('dnLive'), read = $('dnRead');
+    var band = $('dnBand'), bars = $('dnBars');
+    var rise = $('dnRise'), set = $('dnSet'), now = $('dnNow');
+    var slider = $('dnSlider'), follow = $('dnFollow'), moments = $('dnMoments');
+    var figHost = $('dnDeadFig');
+    if (!clock || !slider || !band) return;
+
+    var SW = T.SWITCH, rail = now.parentNode;
+    var following = !T.isForced();
+
+    function pct(h){ return (h / 24 * 100).toFixed(3) + '%'; }
+    function hhmm(h){
+      h = ((h % 24) + 24) % 24;
+      var H2 = Math.floor(h), M2 = Math.round((h - H2) * 60);
+      if (M2 === 60){ M2 = 0; H2 = (H2 + 1) % 24; }
+      return (H2 < 10 ? '0' : '') + H2 + ':' + (M2 < 10 ? '0' : '') + M2;
+    }
+    function lOf(h){ return T.ambL(h); }
+
+    /* 1 · 轨道底：上下两条色带分别采样「天」与「地平线」，横向扫过 24 小时。
+       暖色在地平线带上一眼就能看出来。 */
+    (function(){
+      var sky = [], hor = [];
+      for (var h = 0; h <= 24.0001; h += 0.5){
+        var s = T.ambientAt(Math.min(h, 24)), p = (h / 24 * 100).toFixed(1) + '%';
+        sky.push(s.skyMid + ' ' + p);
+        hor.push(s.skyHorizon + ' ' + p);
+      }
+      var kids = band.children;
+      kids[0].style.backgroundImage = 'linear-gradient(90deg,' + sky.join(',') + ')';
+      kids[1].style.backgroundImage = 'linear-gradient(90deg,' + hor.join(',') + ')';
+    })();
+
+    /* 2 · 死区：**任何一层**落进 L 0.5576–0.6846 的时段。
+       上一版只看 skyTop，所以漏掉了地平线先一步进死区的那十几分钟。 */
+    (function(){
+      function anyDead(h){
+        var s = T.ambientAt(h);
+        for (var i = 0; i < T.LAYERS.length; i++){
+          var L = T.hex2lch(s[T.LAYERS[i]])[0];
+          if (L >= T.DEAD.lo && L <= T.DEAD.hi) return true;
+        }
+        return false;
+      }
+      var runs = [], cur = null;
+      for (var h = 0; h <= 24.0001; h += 1/12){
+        var inz = anyDead(Math.min(h, 24));
+        if (inz && cur === null) cur = h;
+        if (!inz && cur !== null){ runs.push([cur, h]); cur = null; }
+      }
+      if (cur !== null) runs.push([cur, 24]);
+      runs.forEach(function(r){
+        var el = document.createElement('div');
+        el.className = 'rail__dead';
+        el.style.left = pct(r[0]);
+        el.style.width = ((r[1] - r[0]) / 24 * 100).toFixed(3) + '%';
+        rail.insertBefore(el, now);
+      });
+    })();
+
+    /* 3 · 遮罩厚度条：把一天切成 96 格，每格反解一次厚度。
+       它本该大部分是零 —— 那不是没画，那就是答案。 */
+    (function(){
+      var N = 96, peak = 0, nz = 0;
+      for (var i = 0; i < N; i++){
+        var h = (i + 0.5) * 24 / N;
+        var a = T.stateAt(h).scrim;
+        if (a > 0.002) nz++;
+        if (a > peak) peak = a;
+        var el = document.createElement('div');
+        el.className = 'rail__bar';
+        el.style.height = (a * 100).toFixed(1) + '%';
+        el.style.opacity = a > 0.002 ? '1' : '0';
+        bars.appendChild(el);
+      }
+      bars.setAttribute('data-peak', peak.toFixed(3));
+      var note = document.getElementById('dnPeak');
+      if (note) note.textContent = '峰值 ' + peak.toFixed(2) + '　非零 ' + nz + '/' + N + ' 格（每格 15 分钟）';
+    })();
+
+    /* 4 · 翻转标记 */
+    rise.style.left = pct(SW.rise);
+    set.style.left  = pct(SW.set);
+
+    /* 5 · 时刻芯片 */
+    T.MOMENTS.forEach(function(m){
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'moment' + (m.flip ? ' moment--flip' : '');
+      b.innerHTML = '<b>' + hhmm(m.h) + '</b>' + m.label;
+      b.addEventListener('click', function(){
+        following = false; T.setForced(m.h); slider.value = m.h;
+        T.apply(T.stateAt(m.h), true); render();
+      });
+      moments.appendChild(b);
+    });
+
+    /* 6 · 读数 */
+    function render(){
+      var h = T.hour(), st = T.stateAt(h), L = st.L;
+      clock.textContent = hhmm(h);
+      var isDay = st.polarity === 'day';
+      pol.textContent = isDay ? '白天 · 浅底深字' : '夜晚 · 深底浅字';
+      pol.className = 'pol' + (isDay ? ' pol--day' : '');
+      /* 报告的是「文字真正踩到的底」里最差的那一个 */
+      var w = T.worstDetail(st, st.polarity, st.scrim);
+      read.innerHTML = 'skyTop L=' + L.toFixed(3)
+        + '　遮罩 ' + st.scrim.toFixed(2)
+        + '　最差 <b style="color:var(--fg)">' + w.c.toFixed(2) + ':1</b>'
+        + '（' + w.token + ' / ' + w.layer + '）'
+        + (w.c < T.NEED ? '　⚠ 不足' : '');
+      live.textContent = following ? 'LIVE · LOCAL TIME' : 'SCRUB · 手动预览';
+      now.style.left = pct(h);
+      Array.prototype.forEach.call(moments.children, function(el, i){
+        el.classList.toggle('is-on', Math.abs(T.MOMENTS[i].h - h) < 0.06);
+      });
+    }
+
+    /* 7 · 交互 */
+    slider.addEventListener('input', function(){
+      var v = parseFloat(slider.value);
+      following = false; T.setForced(v);
+      T.apply(T.stateAt(v), true); render();
+    });
+    follow.addEventListener('click', function(){
+      T.setForced(null); following = true; T.tick(); render();
+    });
+    T.onTick.push(function(){
+      if (following){ slider.value = T.hour(); render(); }
+    });
+    slider.value = T.hour();
+    render();
+
+    /* 8 · 死区图：两条曲线在 4.5:1 下方交叉 */
+    if (!figHost) return;
+    (function(){
+      var W = 720, H = 300, ML = 54, MR = 20, MT = 24, MB = 42;
+      var pw = W - ML - MR, ph = H - MT - MB;
+      var L0 = 0.30, L1 = 0.95, CMAX = 14, YW = 0.955, YD = 0.0324;
+      function X(L){ return (ML + (L - L0) / (L1 - L0) * pw).toFixed(1); }
+      function Yc(C){ return (MT + ph - Math.min(C, CMAX) / CMAX * ph).toFixed(1); }
+      function curve(fn){
+        var o = [];
+        for (var i = 0; i <= 120; i++){
+          var L = L0 + (L1 - L0) * i / 120, Yb = L * L * L;
+          o.push(X(L) + ',' + Yc(fn(Yb)));
+        }
+        return o.join(' ');
+      }
+      var lbl = ';font-size:10px;font-family:var(--font-mono)';
+      var s = '<div class="deadfig__plot"><svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="白字与深字的对比度随背景明度的变化">';
+      s += '<rect x="' + X(T.DEAD.lo) + '" y="' + MT + '" width="'
+        + (X(T.DEAD.hi) - X(T.DEAD.lo)).toFixed(1) + '" height="' + ph
+        + '" style="fill:rgba(182,74,89,.16)"/>';
+      [0.30, 0.40, 0.50, 0.557, 0.686, 0.80, 0.90].forEach(function(L){
+        s += '<line x1="' + X(L) + '" y1="' + MT + '" x2="' + X(L) + '" y2="' + (MT + ph)
+          + '" style="stroke:var(--line-faint);stroke-width:1"/>';
+        s += '<text x="' + X(L) + '" y="' + (MT + ph + 19) + '" text-anchor="middle" style="fill:var(--fg-faint)'
+          + lbl + '">' + L.toFixed(3) + '</text>';
+      });
+      [4.5, 7, 10, 14].forEach(function(C){
+        s += '<line x1="' + ML + '" y1="' + Yc(C) + '" x2="' + (ML + pw) + '" y2="' + Yc(C)
+          + '" style="stroke:var(--line-faint);stroke-width:1"/>';
+        s += '<text x="' + (ML - 9) + '" y="' + (parseFloat(Yc(C)) + 4) + '" text-anchor="end" style="fill:var(--fg-faint)'
+          + lbl + '">' + C + ':1</text>';
+      });
+      s += '<line x1="' + ML + '" y1="' + Yc(4.5) + '" x2="' + (ML + pw) + '" y2="' + Yc(4.5)
+        + '" style="stroke:var(--accent);stroke-width:1.5;stroke-dasharray:6 5"/>';
+      s += '<polyline points="' + curve(function(Yb){ return (YW + 0.05) / (Yb + 0.05); })
+        + '" style="fill:none;stroke:var(--fg);stroke-width:2.2"/>';
+      s += '<polyline points="' + curve(function(Yb){ return (Yb + 0.05) / (YD + 0.05); })
+        + '" style="fill:none;stroke:var(--accent);stroke-width:2.2"/>';
+      s += '<text x="' + X(0.335) + '" y="' + Yc(11.6) + '" style="fill:var(--fg)' + lbl + '">白字 #fcfaf3</text>';
+      s += '<text x="' + X(0.775) + '" y="' + Yc(9.4) + '" style="fill:var(--accent)' + lbl + '">深字 #0e3557</text>';
+      s += '<text x="' + ML + '" y="' + (MT - 9) + '" style="fill:var(--fg-faint)' + lbl + '">对比度</text>';
+      s += '<text x="' + (ML + pw) + '" y="' + (MT + ph + 34) + '" text-anchor="end" style="fill:var(--fg-faint)'
+        + lbl + '">环境层 OKLCH 明度 L</text>';
+      s += '</svg></div>';
+      s += '<div class="deadfig__cap">横轴是环境层的 OKLCH 明度 L，纵轴是文字对比度，虚线为 4.5:1 的正文底线。'
+        + '两条曲线各自穿过底线的位置，就是死区的两端 —— <b style="font-weight:700;color:var(--fg)">L 0.5576 / 0.6846</b><sup>†</sup>。'
+        + '区间内没有任何一种文字色能救回来，所以极性只能在遮罩里阶跃。</div>';
+      s += '<div class="deadfig__cap" style="margin-top:8px">† 曲线由相对亮度定义式绘制（白字 Y=0.955、深字 Y=0.0324），'
+        + '交点与二分实测一致；实际报告值取 L 0.558–0.686。</div>';
+      figHost.innerHTML = s;
+    })();
+  })();
+})();
+</script>
+</body>
+</html>

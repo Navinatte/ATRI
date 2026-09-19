@@ -1,0 +1,230 @@
+/* ============================================================
+   ATRI-bot · Design Tokens
+   对应《视觉设计规范.md》§3
+
+   ⚠️ 组件只准引用「语义层」令牌（--bg-* / --fg-* / --accent* / --line-*），
+      不得直接引用下面的原始色阶（--sea-* / --atri-* / --ribbon-* …）。
+      否则切换昼夜极性时会残留旧主题的颜色。
+   ============================================================ */
+
+:root{
+  /* ── 原始色阶 · 夜海（实测）────────────────────────── */
+  --sea-950:#070d18; --sea-900:#0a1223; --sea-850:#0d1b33;
+  --sea-800:#142f5c; --sea-700:#223a68; --sea-600:#1f4d8a;
+  --sea-500:#2664ab; --sea-400:#3f7cc0; --sea-300:#5a8dc3;
+  --sea-200:#8fb4d6; --sea-100:#cfe0ef;
+
+  /* ── 原始色阶 · 昼（实测）──────────────────────────── */
+  --sky-400:#96d0fd; --sky-200:#d3eafd;
+
+  /* ── 青 · 身份色 ───────────────────────────────────── */
+  --atri-700:#055579; --atri-500:#397f9d;
+
+  /* ── 红 · 全站唯一高饱和（每屏最多一处）────────────── */
+  --ribbon-600:#871c30; --ribbon-500:#b64a59;
+
+  /* ── 暖光 ─────────────────────────────────────────── */
+  --spark-core:#fbe4cf; --spark-glow:#e8b98f; --spark-ember:#be939b;
+  --foam:#f9f9fa; --sail:#fcfaf3; --brass:#b08e61;
+
+  /* ── 吉祥物声部（禁止泄漏到少女声部）────────────────── */
+  --mascot-dress:#546b77; --mascot-flax:#decec2;
+  --mascot-line:#010101; --mascot-ribbon:#ce6f7d;
+  /* 容器（§6.11）：圆钝，但不至于变成椭圆；深底上 #010101 是不可见的，
+     所以「描线」在深底上改用亚麻色。白天极性会在文件底部覆写这两个。 */
+  --r-mascot:32px;
+  --mascot-line-on-dark:rgba(222,206,194,.30);
+  --mascot-bg:rgba(84,107,119,.14);
+
+  /* ============================================================
+     语义层 · 夜晚极性（默认）
+     白天极性在文件底部用 html[data-polarity="day"] 整体覆写
+     ============================================================ */
+  --bg-base:#0a1223;
+  --bg-panel:rgba(20,47,92,.62);
+  --bg-panel-alt:rgba(13,27,51,.84);
+  --bg-code:#070d18;                     /* 两套极性都不反：代码块永远深底 */
+  /* 代码块的文字色。**不能挂 --fg** —— 白天极性的 --fg 是深蓝 #0e3557，
+     而 --bg-code 在白天仍是深底 #0b2c47，那样会变成深字压深底。
+     所以它是个**跨极性固定值**：不随主题变。 */
+  --fg-code:#fcfaf3;
+
+  --fg:#fcfaf3;
+  --fg-muted:rgba(252,250,243,.68);
+  --fg-faint:rgba(252,250,243,.60);      /* 仅装饰：下限按环境底最浅处算，最差 5.4:1 */
+  --fg-onlight:#0a1223;
+
+  --accent:#70b5d5;                      /* 实测修正：旧值 #397f9d 在自家底上只有 4.18:1 */
+  --accent-deep:var(--atri-500);         /* 只做填充，不承载文字 */
+  --accent-warm:#fbe4cf;                 /* 夜间：高彩度琥珀点光源 */
+  --accent-alert:var(--ribbon-500);
+
+  --line-color:rgba(252,250,243,.14);
+  --line-color-strong:rgba(252,250,243,.30);
+  --line-color-accent:rgba(112,181,213,.45);
+  --line-faint:rgba(252,250,243,.07);
+  --wash:rgba(252,250,243,.06);
+  --wash-accent:rgba(112,181,213,.14);
+
+  /* 环境层：CSS 渐变兜底（第二期由 shader 接管）*/
+  --sea-bg:linear-gradient(180deg,
+    #070d18 0%, #0d1b33 30%, #223a68 58%, #142f5c 78%, #0a1223 100%);
+  --sea-glow:radial-gradient(112% 42% at 50% 52%, #31507d 0%, transparent 66%);
+  --sea-glow-a:.16;
+  --vig-a:rgba(7,13,24,.30);
+  --vig-b:rgba(7,13,24,.46);
+  --nav-solid:rgba(10,18,35,.72);
+  --stars-a:.5;
+
+  /* 夜景照片（§3.10）：照片压在 --sea-bg 之上，再由这个遮罩把它的亮度
+     拉回设计基线。alpha 是**实测标定**出来的 —— 把 .sea 单独截图
+     （隐藏其上一切），逐像素算四枚令牌的对比度，取「全图最坏像素都
+     ≥ 4.5:1」的最小值：0.80 差一点，0.82 起达标，取 0.84 留约 15% 余量。
+     （复现脚本 temp/calibrate_scrim.py；对照组＝摘掉照片层，
+       量出 fg 10.2 / accent 4.68 全部达标，说明这套测法本身可靠。）
+
+     ⚠️ 别只信解析式：temp/verify_bg_photo.py 按「环境层→辉光→遮罩」
+     的顺序反解会得出 0.76，偏乐观 —— 因为 .sea::after 的地平线辉光
+     其实画在遮罩**之上**，它加的那点亮不会被遮罩削掉。实测更准。 */
+  --sea-photo-scrim:rgba(10,18,35,.84);
+  --sea-photo:url("../img/ATRI-bot-nightsea-bg.webp");
+
+  /* 过渡盖布（§3.9.2 的手动切换）：两个极性各自的颜色 */
+  --veil-night:#142f5c;
+  --veil-day:#d3eafd;
+  --veil-a:0;
+
+  /* ── 字体 ─────────────────────────────────────────── */
+  --font-cjk:"Source Han Sans SC","Noto Sans SC","PingFang SC",
+             "HarmonyOS Sans SC","Microsoft YaHei",sans-serif;
+  --font-display:"JiangCheng Yuan","江城圆体",var(--font-cjk);
+  --font-sans:var(--font-display);
+  /* 日文：江城圆体的假名是简体中文语境字形，排不动这句诗，改用系统明朝体 */
+  --font-jp:"Yu Mincho","Hiragino Mincho ProN","Source Han Serif JP","Noto Serif JP",serif;
+  /* 等宽：末尾必须追中文黑体，否则 mono 里的中文会回退成宋体 */
+  --font-mono:ui-monospace,"JetBrains Mono","Cascadia Mono",Consolas,
+              "SFMono-Regular","Noto Sans Mono",monospace,var(--font-cjk);
+
+  /* ── 字阶 ─────────────────────────────────────────── */
+  /* 首屏标题与立绘同屏，让步给右栏；< 900px 立绘隐藏后在 tokens 末尾恢复满幅 */
+  --fs-hero:clamp(44px,6.2vw,96px);
+  --fs-h1:clamp(30px,4.2vw,50px);
+  --fs-h2:clamp(22px,2.6vw,32px);
+  --fs-h3:19px;
+  --fs-body:16px; --fs-sm:14px; --fs-xs:12.5px;
+  --fs-label:12px; --fs-code:13.5px;
+
+  /* ── 间距 / 布局 ──────────────────────────────────── */
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
+  --space-5:24px; --space-6:32px; --space-7:48px; --space-8:64px;
+  --space-9:96px; --space-10:128px;
+  --maxw:1120px; --maxw-wide:1320px;
+  /* 全宽容器（导航栏 / 文档侧边栏）的左内边距。
+     这两个元素要贴屏幕最左边，不能受 --maxw 居中约束 ——
+     共用一个值，它们的左缘才会对齐。 */
+  --gutter:clamp(20px,2.6vw,48px);
+  --sec-py:clamp(72px,10vh,132px);
+  --grid-gap:24px;
+
+  /* ── 圆角 / 切角 ──────────────────────────────────── */
+  --r-0:0; --r-1:2px; --r-2:4px; --r-pill:999px; --cut:18px;
+  --cut-path:polygon(18px 0,100% 0,100% calc(100% - 18px),
+                     calc(100% - 18px) 100%,0 100%,0 18px);
+
+  /* ── 描边 / 光影 ──────────────────────────────────── */
+  --glow-cold:0 0 0 1px rgba(90,141,195,.28),0 18px 48px -26px rgba(38,100,171,.60);
+  --glow-warm:0 0 26px rgba(251,228,207,.24);
+  --shadow-deep:0 24px 64px -34px rgba(4,10,22,.92);
+
+  /* ── 层级 ─────────────────────────────────────────── */
+  --z-sea:1; --z-veil:2; --z-content:10; --z-nav:100;
+
+  /* ── 动效 ─────────────────────────────────────────── */
+  --ease-sea:cubic-bezier(.22,.61,.30,1);   /* 故意不用回弹曲线 */
+  --ease-quiet:cubic-bezier(.33,1,.68,1);
+  --dur-1:120ms; --dur-2:240ms; --dur-3:480ms; --dur-4:900ms; --dur-idle:18s;
+  /* 跨页平移（§8.6）：入场比离场长 —— 离场拖久了像卡住，入场拖久了像沉下去 */
+  --dur-nav-out:240ms; --dur-nav-in:420ms;
+  /* 跨文档 View Transitions 的整程时长：旧页滑出与新页滑入**并行**，
+     所以这一个值就是整段转场的长度（老路径是 out+in 两段相加） */
+  --dur-nav-vt:520ms;
+  /* 文档页之间用交叉淡化，比整页平移短。520ms 的淡化会让文字
+     看起来糊一下，而且淡入淡出不需要走完那幺长的行程。 */
+  --dur-nav-fade:300ms;
+  --shift-nav:clamp(40px,9vw,150px);
+
+  color-scheme:dark;
+}
+
+/* ============================================================
+   语义层 · 白天极性（§3.8.2）
+   同一根色相轴，整体反过来。因为全部挂在语义名上，
+   所以属性一转整页就跟着转 —— 组件不需要第二套样式。
+   ============================================================ */
+html[data-polarity="day"]{
+  --bg-base:#d3eafd;
+  --bg-panel:rgba(255,255,255,.62);
+  --bg-panel-alt:rgba(252,254,255,.84);
+  --bg-code:#0b2c47;                     /* 仍为深底：与暖白文形成 ≈13:1 */
+
+  --fg:#0e3557;                          /* 实测：在页面顶边 #96d0fd 上 7.65:1 */
+  --fg-muted:#24486b;                    /* 5.75 */
+  /* ⚠️ 旧值 #35566b 标的是 4.73 —— 但那是按**天顶最亮处**算的，算错了方向：
+     深字压浅底时，最差的是**最暗**处（底部暗角把底压到 L≈0.53）。
+     按最暗处复算，旧值只有 4.29:1（**实测确认，改造前就已失格**）。
+     同色相/彩度下调 L（0.437→0.376）得 #25455a：最差点上 5.10:1。 */
+  --fg-faint:#25455a;                    /* 仅装饰，关键信息用 --fg-muted */
+  --fg-onlight:#0e3557;
+
+  --accent:#0b4a7d;
+  --accent-deep:#0f5aa8;
+  --accent-warm:#7a4712;                 /* 推导值，尚未用参考图实测 */
+
+  --line-color:rgba(14,53,87,.16);
+  --line-color-strong:rgba(14,53,87,.30);
+  --line-color-accent:rgba(11,74,125,.50);
+  --line-faint:rgba(14,53,87,.09);
+  --wash:rgba(14,53,87,.05);
+  --wash-accent:rgba(11,74,125,.10);
+
+  /* 页面渐变的上缘取 sky-400 而非天顶 —— 天顶 #48a6fb 会让 accent 只剩 4.93 */
+  --sea-bg:linear-gradient(180deg,
+    #96d0fd 0%, #b7defc 30%, #cbe8fd 58%, #a8d8fb 78%, #d3eafd 100%);
+  --sea-glow:radial-gradient(112% 42% at 50% 52%, #dff2fa 0%, transparent 66%);
+  --sea-glow-a:.5;
+  --vig-a:rgba(14,53,87,.06);
+  --vig-b:rgba(14,53,87,.14);
+  --nav-solid:rgba(236,245,254,.82);
+  --stars-a:0;                           /* 白天没有星星 */
+
+  --glow-cold:0 0 0 1px rgba(11,74,125,.16),0 18px 48px -26px rgba(11,74,125,.22);
+  --glow-warm:0 0 26px rgba(122,71,18,.14);
+  --shadow-deep:0 24px 64px -34px rgba(14,53,87,.22);
+
+  /* 吉祥物声部："深底上的描线"在白底上会看不见，所以这里要转成深色。
+     变量名保留不变，组件无须分极性写两套。 */
+  --mascot-line-on-dark:rgba(14,53,87,.34);
+  --mascot-bg:rgba(84,107,119,.12);
+
+  /* 昼景照片（§3.10）：遮罩是**浅色**的，作用与夜晚相反 ——
+     它同时把暗部抬亮、把亮部压下来，两头都往 #d3eafd（L≈0.80）收。
+     白天是深字压浅底，最坏情况是**最暗**的像素：
+       当前纯渐变底的 min L = 0.5286 ⇒ faint 只有 4.29:1（本就失格）；
+     而这张照片的原始范围是 0.07~1.00，不遮罩的话 faint 只有 1.00:1。
+     0.86 把范围收到 0.63~0.82，四枚令牌全部达标，
+     顺带把原来那个 faint 失格也修掉了。
+     复现：temp/verify_day_bg_photo.py（解析）→ temp/calibrate_scrim.py（实测）*/
+  --sea-photo-scrim:rgba(211,234,253,.88);
+  --sea-photo:url("../img/ATRI-bot-daysea-bg.webp");
+
+  color-scheme:light;
+}
+
+/* ============================================================
+   首屏字阶 · 窄屏回摆
+   < 900px 立绘隐藏（§7），标题重新独占整行，就该回到满幅尺寸。
+   必须用 :root —— html 的选择器权重低于 :root，写在 layout.css 里反而会被上面的定义压住。
+   ============================================================ */
+@media (max-width:899px){
+  :root{--fs-hero:clamp(46px,9vw,118px)}
+}

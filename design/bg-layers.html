@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-view="all" data-wtarget="all">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>多层壁纸拆分实验 · ATRI-bot</title>
+<style>
+:root{
+  --bg:#0a1223;
+  --bg-deep:#070d18;
+  --panel:rgba(20,47,92,.55);
+  --panel-2:rgba(20,47,92,.34);
+  --line:rgba(252,250,243,.10);
+  --line-2:rgba(252,250,243,.18);
+  --fg:#fcfaf3;
+  --fg-muted:rgba(252,250,243,.68);
+  --fg-faint:rgba(252,250,243,.46);
+  --accent:#70b5d5;
+  --warm:#fbe4cf;
+  --r:14px;
+  --r-sm:9px;
+  --r-pill:999px;
+  --ease:cubic-bezier(.22,.61,.30,1);
+  --font:"江城圆体","JiangChengYuanTi","PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  --font-mono:ui-monospace,"Cascadia Mono",Consolas,"Microsoft YaHei",monospace;
+
+  /* bg1 角色层 */
+  --o1:1;  --s1:1;  --x1:0%;  --y1:0%;  --z1:2;
+  /* bg3 光斑层 */
+  --o3:.6; --s3:1;  --x3:0%;  --y3:0%;  --z3:3; --bm3:screen;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  min-height:100vh;
+  background:
+    radial-gradient(120% 70% at 50% 0%, #142f5c 0%, rgba(20,47,92,0) 62%),
+    var(--bg);
+  color:var(--fg);
+  font:400 15px/1.75 var(--font);
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1560px;margin:0 auto;padding:26px 22px 54px}
+
+/* ---------- 页头 ---------- */
+.head{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;flex-wrap:wrap;margin-bottom:20px}
+.head h1{margin:0;font-size:22px;font-weight:700;letter-spacing:.04em}
+.head h1 small{display:block;margin-top:5px;font-size:12.5px;font-weight:400;letter-spacing:.14em;color:var(--fg-faint)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px}
+.legend span{font:400 11.5px/1.6 var(--font-mono);color:var(--fg-faint)}
+.legend b{color:var(--accent);font-weight:400}
+.head__meta{font:400 12.5px/1.7 var(--font-mono);color:var(--fg-faint);text-align:right}
+.head__meta b{color:var(--warm);font-weight:400}
+
+/* ---------- 主布局 ---------- */
+.main{display:grid;grid-template-columns:minmax(0,1fr) 322px;gap:22px;align-items:start}
+@media (max-width:1060px){ .main{grid-template-columns:minmax(0,1fr)} }
+
+/* ---------- 舞台 ---------- */
+.stage{
+  position:relative;border-radius:var(--r);overflow:hidden;
+  background:var(--bg-deep);
+  box-shadow:0 22px 60px -22px rgba(0,0,0,.85), 0 0 0 1px var(--line);
+}
+.stage__inner{
+  position:relative;aspect-ratio:1672/941;overflow:hidden;
+  cursor:crosshair;background:var(--bg-deep);
+  isolation:isolate;               /* 把混合限制在舞台内 */
+  touch-action:none;
+}
+/* 单独检视某层时的棋盘格底 */
+html[data-view="bg1"] .stage__inner,
+html[data-view="bg3"] .stage__inner{
+  background:repeating-conic-gradient(#20242c 0% 25%, #171b22 0% 50%) 0 0 / 26px 26px;
+}
+
+/* 图层骨架：外层裁剪+混合 / 内层变换 / 最内图片 */
+.ly{position:absolute;inset:0;width:100%;height:100%;user-select:none}
+.ly--base{z-index:0}
+/* ❗裁剪与混合必须写在同一元素上：clip-path 会创建层叠上下文从而隔离 mix-blend-mode，
+   若把混合放内层，它就只会与「自己」混合 ⇒ screen 静默失效退化成 normal */
+#c1{opacity:var(--o1);mix-blend-mode:normal;z-index:var(--z1)}
+#c3{opacity:var(--o3);mix-blend-mode:var(--bm3);z-index:var(--z3)}
+.ly--x{transform:translate(var(--x3),var(--y3)) scale(var(--s3));transition:transform .22s var(--ease)}
+#x1{transform:translate(var(--x1),var(--y1)) scale(var(--s1))}
+.ly img{
+  display:block;width:100%;height:100%;object-fit:cover;
+  -webkit-user-drag:none;user-select:none;
+}
+.ly--grid{z-index:90;pointer-events:none;opacity:0;transition:opacity .2s var(--ease)}
+html.has-grid .ly--grid{opacity:1}
+.ly--grid i{position:absolute;background:rgba(112,181,213,.26)}
+.ly--grid i:nth-child(1){left:33.333%;top:0;width:1px;height:100%}
+.ly--grid i:nth-child(2){left:66.666%;top:0;width:1px;height:100%}
+.ly--grid i:nth-child(3){left:0;top:33.333%;width:100%;height:1px}
+.ly--grid i:nth-child(4){left:0;top:66.666%;width:100%;height:1px}
+.ly--grid i:nth-child(5){left:0;top:47.3%;width:100%;height:1px;
+  background:repeating-linear-gradient(90deg,var(--warm) 0 7px,transparent 7px 14px);opacity:.72}
+.ly--grid i:nth-child(6){left:50%;top:0;width:1px;height:100%;background:rgba(252,250,243,.15)}
+
+/* ---------- 擦除分割线 ---------- */
+.wipe{position:absolute;top:0;bottom:0;left:0;right:0;z-index:95;pointer-events:none}
+.wipe__line{
+  position:absolute;top:0;bottom:0;width:0;
+  left:calc(100% - var(--wipe-right, 0%));
+}
+.wipe__line::before{
+  content:"";position:absolute;top:0;bottom:0;left:-1px;width:2px;
+  background:linear-gradient(180deg,rgba(255,255,255,.12),#fff 16%,#fff 84%,rgba(255,255,255,.12));
+  box-shadow:0 0 12px rgba(0,0,0,.6);
+}
+.wipe__grip{
+  position:absolute;top:50%;left:0;translate:-50% -50%;
+  width:38px;height:38px;border-radius:var(--r-pill);
+  background:rgba(10,18,35,.74);border:1.5px solid rgba(255,255,255,.85);
+  backdrop-filter:blur(6px);display:grid;place-items:center;
+  font:400 10px/1 var(--font-mono);color:#fff;
+}
+.wipe__grip::after{content:"◀ ▶";font-size:8.5px;letter-spacing:1px}
+.wipe__tag{
+  position:absolute;top:12px;padding:5px 9px;border-radius:var(--r-sm);
+  background:rgba(10,18,35,.68);border:1px solid var(--line-2);
+  color:var(--fg-muted);font:400 11px/1 var(--font);letter-spacing:.06em;
+  white-space:nowrap;backdrop-filter:blur(4px);
+}
+.wipe__tag--l{right:14px}
+.wipe__tag--r{left:14px}
+
+/* ---------- 控制面板 ---------- */
+.panel{
+  border-radius:var(--r);border:1px solid var(--line);
+  background:var(--panel);backdrop-filter:blur(10px);
+  padding:15px 16px 17px;
+}
+.panel + .panel{margin-top:14px}
+.panel h2{
+  margin:0 0 11px;font-size:11.5px;font-weight:700;letter-spacing:.18em;
+  color:var(--accent);text-transform:uppercase;
+}
+.panel h2 span{color:var(--fg-faint);font-weight:400;letter-spacing:.06em;margin-left:6px;text-transform:none;font-size:11px}
+.panel h2 b{color:var(--warm);font-weight:400}
+
+.seg{display:grid;gap:6px}
+.seg--2{grid-template-columns:repeat(2,1fr)}
+.seg--3{grid-template-columns:repeat(3,1fr)}
+.seg--5{grid-template-columns:repeat(3,1fr)}
+.seg button{
+  appearance:none;cursor:pointer;padding:8px 4px;border-radius:var(--r-sm);
+  border:1px solid var(--line-2);background:var(--panel-2);
+  color:var(--fg-muted);font:400 12.5px/1.3 var(--font);
+  transition:all .18s var(--ease);white-space:nowrap;
+}
+.seg button:hover{color:var(--fg);border-color:rgba(112,181,213,.45)}
+.seg button[aria-pressed="true"]{
+  background:rgba(112,181,213,.16);border-color:var(--accent);color:#dff2fa;font-weight:700;
+}
+.seg button i{display:block;font:400 9.5px/1.5 var(--font-mono);color:var(--fg-faint);font-style:normal}
+.seg button[aria-pressed="true"] i{color:rgba(223,242,250,.6)}
+.seg button small{display:block;font:400 9.5px/1.4 var(--font);color:var(--fg-faint);letter-spacing:.02em}
+
+.row{margin-top:12px}
+.row__top{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:4px}
+.row__k{font-size:12.5px;color:var(--fg-muted)}
+.row__v{font:400 11.5px/1 var(--font-mono);color:var(--accent)}
+.row--off{opacity:.32;pointer-events:none}
+.duo{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.duo .row{margin-top:0}
+.duo .row__k{font-size:12px}
+
+input[type=range]{appearance:none;width:100%;height:20px;background:transparent;cursor:pointer;margin:0;display:block}
+input[type=range]::-webkit-slider-runnable-track{height:3px;border-radius:2px;background:rgba(252,250,243,.16)}
+input[type=range]::-webkit-slider-thumb{
+  appearance:none;width:13px;height:13px;margin-top:-5px;border-radius:var(--r-pill);
+  background:var(--accent);border:2px solid var(--bg);box-shadow:0 0 0 1px var(--accent);
+  transition:transform .15s var(--ease);
+}
+input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.18)}
+
+.check{display:flex;align-items:center;gap:9px;margin-top:11px;font-size:12.5px;color:var(--fg-muted);cursor:pointer}
+.check input{accent-color:var(--accent);width:15px;height:15px;cursor:pointer}
+.btn{
+  appearance:none;cursor:pointer;width:100%;padding:10px;border-radius:var(--r-sm);
+  border:1px solid var(--line-2);background:var(--panel-2);
+  color:var(--fg);font:400 13px/1 var(--font);transition:all .18s var(--ease);
+}
+.btn:hover{border-color:var(--accent);background:rgba(112,181,213,.14)}
+.btn:active{transform:translateY(1px)}
+.btn + .btn{margin-top:8px}
+
+.note{margin:10px 0 0;font-size:12px;line-height:1.8;color:var(--fg-faint)}
+.note b{color:var(--fg-muted);font-weight:400}
+.note em{color:var(--warm);font-style:normal}
+.kbd{display:inline-block;padding:1px 5px;border-radius:5px;border:1px solid var(--line-2);
+  background:var(--panel-2);font:400 10.5px/1.6 var(--font-mono);color:var(--fg-muted)}
+.toast{
+  position:fixed;left:50%;bottom:26px;translate:-50% 0;padding:10px 16px;border-radius:var(--r-sm);
+  background:rgba(10,18,35,.92);border:1px solid var(--accent);color:var(--fg);font-size:13px;
+  pointer-events:none;opacity:0;transition:opacity .25s var(--ease);z-index:9;
+}
+.toast.is-on{opacity:1}
+@media (prefers-reduced-motion:reduce){ *{transition-duration:.01ms!important} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="head">
+    <div>
+      <h1>多层壁纸 · 拆分实验
+        <small>LAYER SPLIT LAB — bg0 夜海 / bg1 亚托莉 / bg3 光斑</small>
+      </h1>
+      <div class="legend">
+        <span><b>bg0</b> 底图 RGB 1672×941</span>
+        <span><b>bg1</b> 角色 RGBA 1642×958 · normal</span>
+        <span><b>bg3</b> 光斑 RGBA 1659×948 · screen</span>
+      </div>
+    </div>
+    <div class="head__meta">
+      拖动画面 = 擦除对比<br>
+      <b id="hdState">三层叠加</b>
+    </div>
+  </header>
+
+  <div class="main">
+
+    <!-- ================= 舞台 ================= -->
+    <section>
+      <div class="stage">
+        <div class="stage__inner" id="inner">
+
+          <!-- bg0 夜海：永不参与擦除 -->
+          <img class="ly ly--base" id="b0" src="atri-bg0-night.png" alt="底层 bg0：夜海" draggable="false">
+
+          <!-- bg1 亚托莉 -->
+          <div class="ly ly--clip" id="c1">
+            <div class="ly ly--x" id="x1">
+              <img id="b1" src="atri-bg1.png" alt="角色层 bg1：亚托莉与线香花火" draggable="false">
+            </div>
+          </div>
+
+          <!-- bg3 光斑 -->
+          <div class="ly ly--clip" id="c3">
+            <div class="ly ly--x" id="x3">
+              <img id="b3" src="atri-bg3.png" alt="光斑层 bg3：暖色散景与月晕" draggable="false">
+            </div>
+          </div>
+
+          <div class="ly ly--grid" id="grid" aria-hidden="true">
+            <i></i><i></i><i></i><i></i><i></i><i></i>
+          </div>
+
+          <div class="wipe" id="wipe" style="display:none">
+            <div class="wipe__line">
+              <span class="wipe__grip"></span>
+              <span class="wipe__tag wipe__tag--l" id="tagL">← 叠加</span>
+              <span class="wipe__tag wipe__tag--r" id="tagR">对比 →</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="note" id="hint">在画面上按住左右拖动 = 擦除对比。</p>
+    </section>
+
+    <!-- ================= 面板 ================= -->
+    <aside>
+
+      <div class="panel">
+        <h2>视图 <span>VIEW</span></h2>
+        <div class="seg seg--2" id="viewSeg">
+          <button data-view="all" aria-pressed="true">三层叠加<small>全部可见</small></button>
+          <button data-view="bg0" aria-pressed="false">仅 bg0<small>纯净底图</small></button>
+          <button data-view="bg1" aria-pressed="false">仅 bg1<small>棋盘格检视</small></button>
+          <button data-view="bg3" aria-pressed="false">仅 bg3<small>棋盘格检视</small></button>
+        </div>
+
+        <div class="row" id="wtRow">
+          <div class="row__top"><span class="row__k">擦除对比对象</span><span class="row__v" id="wtOut">全部</span></div>
+          <div class="seg seg--3" id="wtSeg">
+            <button data-wt="all" aria-pressed="true">全部</button>
+            <button data-wt="bg1" aria-pressed="false">bg1</button>
+            <button data-wt="bg3" aria-pressed="false">bg3</button>
+          </div>
+        </div>
+
+        <div class="row" id="wipeRow">
+          <div class="row__top"><span class="row__k">擦除分割</span><span class="row__v" id="outWipe">100%</span></div>
+          <input type="range" id="rWipe" min="0" max="100" step="0.5" value="100">
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>bg1 角色层 <span>FOREGROUND</span></h2>
+        <div class="row">
+          <div class="row__top"><span class="row__k">不透明度</span><span class="row__v" data-out="bg1.op">100%</span></div>
+          <input type="range" class="pr" data-layer="bg1" data-prop="op" min="0" max="100" step="1" value="100">
+        </div>
+        <div class="row">
+          <div class="row__top"><span class="row__k">缩放</span><span class="row__v" data-out="bg1.s">100%</span></div>
+          <input type="range" class="pr" data-layer="bg1" data-prop="s" min="60" max="150" step="0.5" value="100">
+        </div>
+        <div class="duo">
+          <div class="row">
+            <div class="row__top"><span class="row__k">水平</span><span class="row__v" data-out="bg1.x">0%</span></div>
+            <input type="range" class="pr" data-layer="bg1" data-prop="x" min="-40" max="40" step="0.5" value="0">
+          </div>
+          <div class="row">
+            <div class="row__top"><span class="row__k">垂直</span><span class="row__v" data-out="bg1.y">0%</span></div>
+            <input type="range" class="pr" data-layer="bg1" data-prop="y" min="-40" max="40" step="0.5" value="0">
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>bg3 光斑层 <span>BLOOM</span></h2>
+        <div class="row" style="margin-top:0">
+          <div class="row__top"><span class="row__k">混合模式</span><span class="row__v" id="bmOut">screen</span></div>
+          <div class="seg seg--5" id="bmSeg">
+            <button data-bm="normal" aria-pressed="false">正常<i>normal</i></button>
+            <button data-bm="screen" aria-pressed="true">滤色<i>screen</i></button>
+            <button data-bm="lighten" aria-pressed="false">变亮<i>lighten</i></button>
+            <button data-bm="overlay" aria-pressed="false">叠加<i>overlay</i></button>
+            <button data-bm="soft-light" aria-pressed="false">柔光<i>soft-light</i></button>
+            <button id="bmHelp" title="说明">?<i>帮助</i></button>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="row__top"><span class="row__k">层序</span><span class="row__v" id="zOut">在角色之上</span></div>
+          <div class="seg seg--2" id="zSeg">
+            <button data-z="top" aria-pressed="true">在角色之上</button>
+            <button data-z="bottom" aria-pressed="false">在角色之下</button>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="row__top"><span class="row__k">不透明度</span><span class="row__v" data-out="bg3.op">60%</span></div>
+          <input type="range" class="pr" data-layer="bg3" data-prop="op" min="0" max="100" step="1" value="60">
+        </div>
+        <div class="row">
+          <div class="row__top"><span class="row__k">缩放</span><span class="row__v" data-out="bg3.s">100%</span></div>
+          <input type="range" class="pr" data-layer="bg3" data-prop="s" min="60" max="150" step="0.5" value="100">
+        </div>
+        <div class="duo">
+          <div class="row">
+            <div class="row__top"><span class="row__k">水平</span><span class="row__v" data-out="bg3.x">0%</span></div>
+            <input type="range" class="pr" data-layer="bg3" data-prop="x" min="-40" max="40" step="0.5" value="0">
+          </div>
+          <div class="row">
+            <div class="row__top"><span class="row__k">垂直</span><span class="row__v" data-out="bg3.y">0%</span></div>
+            <input type="range" class="pr" data-layer="bg3" data-prop="y" min="-40" max="40" step="0.5" value="0">
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>视图工具 <span>TOOLS</span></h2>
+        <label class="check"><input type="checkbox" id="cGrid"> 参考线 / 地平线（47.3%）</label>
+        <button class="btn" id="bReset" style="margin-top:12px">重置全部参数</button>
+        <button class="btn" id="bExport">导出合成 PNG</button>
+      </div>
+
+      <div class="panel">
+        <h2>说明 <span>NOTES</span></h2>
+        <p class="note">
+          <em>bg3 是「白底半透明」的光效层</em>，所以普通叠加会把残留白糊上去（右上圆盘会变成生硬的白圆）。
+          用 <b>滤色 screen</b> 时白色等于不生效，只留下暖金光斑，圆盘自然变成月晕。
+        </p>
+        <p class="note">
+          三个层的宽高比各不相同（相差约 3.5%），并非同一构图，需要靠滑块手动对齐。
+          擦除分割线用来<span style="color:var(--fg-muted)">逐层剥离</span>：把对比对象设成 bg3，线两侧的差异就全是光斑层带来的。
+        </p>
+        <p class="note">
+          <span class="kbd">1</span><span class="kbd">2</span><span class="kbd">3</span><span class="kbd">4</span> 切视图 ·
+          <span class="kbd">G</span> 参考线 · <span class="kbd">0</span> 重置
+        </p>
+      </div>
+
+    </aside>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  var root  = document.documentElement;
+  var inner = document.getElementById('inner');
+  var wipeEl = document.getElementById('wipe');
+  var toastEl = document.getElementById('toast');
+  var hint = document.getElementById('hint');
+  var hdState = document.getElementById('hdState');
+
+  /* ---------------- 状态 ---------------- */
+  var DEF = {
+    view: 'all',
+    wt: 'all',
+    wipe: 100,
+    z: 'top',
+    grid: false,
+    bg1: { op: 100, s: 100, x: 0, y: 0 },
+    bg3: { op: 60, s: 100, x: 0, y: 0, bm: 'screen' }
+  };
+  var S = JSON.parse(JSON.stringify(DEF));
+
+  var WT_NAME = { all: '全部', bg1: 'bg1 角色层', bg3: 'bg3 光斑层' };
+  var TAG_L = { all: '← 三层叠加', bg1: '← 含 bg1', bg3: '← 含 bg3' };
+  var TAG_R = { all: '纯 bg0 →', bg1: '不含 bg1 →', bg3: '不含 bg3 →' };
+  var VIEW_NAME = { all: '三层叠加', bg0: '仅 bg0', bg1: '仅 bg1', bg3: '仅 bg3' };
+
+  /* ---------------- DOM ---------------- */
+  var c1 = document.getElementById('c1');
+  var c3 = document.getElementById('c3');
+  var gridEl = document.getElementById('grid');
+  var img0 = document.getElementById('b0');
+  var img1 = document.getElementById('b1');
+  var img3 = document.getElementById('b3');
+  var rWipe = document.getElementById('rWipe');
+
+  /* ---------------- 渲染 ---------------- */
+  function fmtNum(v) {
+    return (Math.abs(v % 1) < 1e-6) ? String(Math.round(v)) : v.toFixed(1);
+  }
+  function fmtSigned(v) {
+    return (v > 0 ? '+' : '') + fmtNum(v) + '%';
+  }
+
+  function apply() {
+    // 1) 写入 CSS 变量
+    root.style.setProperty('--o1', S.bg1.op / 100);
+    root.style.setProperty('--s1', S.bg1.s / 100);
+    root.style.setProperty('--x1', S.bg1.x + '%');
+    root.style.setProperty('--y1', S.bg1.y + '%');
+
+    root.style.setProperty('--o3', S.bg3.op / 100);
+    root.style.setProperty('--s3', S.bg3.s / 100);
+    root.style.setProperty('--x3', S.bg3.x + '%');
+    root.style.setProperty('--y3', S.bg3.y + '%');
+    root.style.setProperty('--z3', S.z === 'top' ? 3 : 1);
+
+    // 单独检视某层时，光斑层强制 normal，否则看不出 alpha
+    var bm = (S.view === 'all') ? S.bg3.bm : 'normal';
+    root.style.setProperty('--bm3', bm);
+
+    // 2) 可见性
+    var single = (S.view === 'bg1' || S.view === 'bg3');
+    img0.style.display = single ? 'none' : '';
+    c1.style.display = (S.view === 'bg0' || S.view === 'bg3') ? 'none' : '';
+    c3.style.display = (S.view === 'bg0' || S.view === 'bg1') ? 'none' : '';
+    gridEl.style.display = S.grid ? '' : 'none';
+    root.dataset.view = S.view;
+    root.classList.toggle('has-grid', S.grid);
+
+    // 3) 擦除裁剪：只在三层叠加时有效，逐层条件应用
+    var wiping = (S.view === 'all' && S.wipe < 100);
+    var ins = 'inset(0 ' + (100 - S.wipe) + '% 0 0)';
+    c1.style.clipPath = (wiping && (S.wt === 'all' || S.wt === 'bg1')) ? ins : '';
+    c3.style.clipPath = (wiping && (S.wt === 'all' || S.wt === 'bg3')) ? ins : '';
+
+    wipeEl.style.display = wiping ? '' : 'none';
+    wipeEl.querySelector('.wipe__line').style.setProperty('--wipe-right', (100 - S.wipe) + '%');
+    document.getElementById('tagL').textContent = TAG_L[S.wt];
+    document.getElementById('tagR').textContent = TAG_R[S.wt];
+
+    // 4) 控件状态
+    var vbtns = document.querySelectorAll('#viewSeg button');
+    for (var i = 0; i < vbtns.length; i++) {
+      vbtns[i].setAttribute('aria-pressed', String(vbtns[i].dataset.view === S.view));
+    }
+    var wbtns = document.querySelectorAll('#wtSeg button');
+    for (var j = 0; j < wbtns.length; j++) {
+      wbtns[j].setAttribute('aria-pressed', String(wbtns[j].dataset.wt === S.wt));
+    }
+    var bbtns = document.querySelectorAll('#bmSeg button[data-bm]');
+    for (var k = 0; k < bbtns.length; k++) {
+      bbtns[k].setAttribute('aria-pressed', String(bbtns[k].dataset.bm === S.bg3.bm));
+    }
+    var zbtns = document.querySelectorAll('#zSeg button');
+    for (var m = 0; m < zbtns.length; m++) {
+      zbtns[m].setAttribute('aria-pressed', String(zbtns[m].dataset.z === S.z));
+    }
+
+    document.getElementById('wtOut').textContent = WT_NAME[S.wt];
+    document.getElementById('bmOut').textContent = S.bg3.bm;
+    document.getElementById('zOut').textContent = (S.z === 'top' ? '在角色之上' : '在角色之下');
+    document.getElementById('outWipe').textContent = Math.round(S.wipe) + '%';
+    rWipe.value = S.wipe;
+
+    document.getElementById('wipeRow').classList.toggle('row--off', S.view !== 'all');
+    document.getElementById('wtRow').classList.toggle('row--off', S.view !== 'all');
+
+    // 5) 滑块与读数回填
+    var prs = document.querySelectorAll('.pr');
+    for (var n = 0; n < prs.length; n++) {
+      var el = prs[n];
+      var L = S[el.dataset.layer];
+      var p = el.dataset.prop;
+      el.value = L[p];
+    }
+    var outs = document.querySelectorAll('[data-out]');
+    for (var q = 0; q < outs.length; q++) {
+      var o = outs[q];
+      var parts = o.dataset.out.split('.');
+      var LV = S[parts[0]];
+      var PV = parts[1];
+      o.textContent = (PV === 'x' || PV === 'y') ? fmtSigned(LV[PV]) : fmtNum(LV[PV]) + '%';
+    }
+
+    // 6) 提示文案
+    if (S.view !== 'all') {
+      hint.textContent = (S.view === 'bg0')
+        ? '只看底层 bg0 —— 干净的夜海原图。'
+        : ('只看 ' + S.view + ' —— 棋盘格处即该层的透明区域。');
+    } else {
+      hint.textContent = (S.wipe >= 100)
+        ? '在画面上按住左右拖动 = 擦除对比。也可把「擦除对比对象」设成单个层，看那一层带来了什么。'
+        : ('分割线左侧是' + TAG_L[S.wt].replace('← ', '') + '，右侧是' + TAG_R[S.wt].replace(' →', '') + '。');
+    }
+    hdState.textContent = VIEW_NAME[S.view];
+  }
+
+  /* ---------------- 舞台拖拽 ---------------- */
+  var dragging = false;
+  function wipeAt(clientX) {
+    var r = inner.getBoundingClientRect();
+    S.wipe = Math.max(0, Math.min(100, (clientX - r.left) / r.width * 100));
+    apply();
+  }
+  inner.addEventListener('pointerdown', function (e) {
+    if (S.view !== 'all') return;
+    dragging = true;
+    root.classList.add('is-dragging');
+    try { inner.setPointerCapture(e.pointerId); } catch (err) {}
+    wipeAt(e.clientX);
+  });
+  inner.addEventListener('pointermove', function (e) { if (dragging) wipeAt(e.clientX); });
+  function endDrag() {
+    if (!dragging) return;
+    dragging = false;
+    root.classList.remove('is-dragging');
+  }
+  inner.addEventListener('pointerup', endDrag);
+  inner.addEventListener('pointercancel', endDrag);
+
+  /* ---------------- 事件 ---------------- */
+  document.getElementById('viewSeg').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-view]');
+    if (b) { S.view = b.dataset.view; apply(); }
+  });
+  document.getElementById('wtSeg').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-wt]');
+    if (b) { S.wt = b.dataset.wt; apply(); }
+  });
+  document.getElementById('bmSeg').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-bm]');
+    if (b) { S.bg3.bm = b.dataset.bm; apply(); }
+  });
+  document.getElementById('zSeg').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-z]');
+    if (b) { S.z = b.dataset.z; apply(); }
+  });
+
+  document.addEventListener('input', function (e) {
+    var t = e.target;
+    if (t.id === 'rWipe') { S.wipe = parseFloat(t.value); apply(); return; }
+    if (!t.dataset || !t.dataset.layer) return;
+    S[t.dataset.layer][t.dataset.prop] = parseFloat(t.value);
+    apply();
+  });
+
+  document.getElementById('cGrid').addEventListener('change', function () {
+    S.grid = this.checked; apply();
+  });
+
+  document.getElementById('bReset').addEventListener('click', function () {
+    S = JSON.parse(JSON.stringify(DEF));
+    document.getElementById('cGrid').checked = false;
+    apply();
+    toast('已重置全部参数');
+  });
+
+  document.getElementById('bmHelp').addEventListener('click', function () {
+    toast('screen 滤色：白不变白、只加亮 —— 光效层首选。overlay/soft-light 会连底色一起改');
+  });
+
+  /* ---------------- 键盘 ---------------- */
+  document.addEventListener('keydown', function (e) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    var tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea') return;
+    var map = { '1': 'all', '2': 'bg0', '3': 'bg1', '4': 'bg3' };
+    if (map[e.key]) { S.view = map[e.key]; apply(); }
+    else if (e.key === '0') document.getElementById('bReset').click();
+    else if (e.key === 'g' || e.key === 'G') {
+      var c = document.getElementById('cGrid');
+      c.checked = !c.checked; S.grid = c.checked; apply();
+    }
+  });
+
+  /* ---------------- toast ---------------- */
+  var tTimer = null;
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('is-on');
+    clearTimeout(tTimer);
+    tTimer = setTimeout(function () { toastEl.classList.remove('is-on'); }, 2400);
+  }
+
+  /* ---------------- 导出合成 PNG ---------------- */
+  var CANVAS_BM = {
+    normal: 'source-over', screen: 'screen', lighten: 'lighten',
+    overlay: 'overlay', 'soft-light': 'soft-light'
+  };
+
+  function coverRect(iw, ih, W, H) {
+    var s = Math.max(W / iw, H / ih);
+    var w = iw * s, h = ih * s;
+    return { x: (W - w) / 2, y: (H - h) / 2, w: w, h: h };
+  }
+
+  function drawLayer(ctx, img, L, bm, clipW, W, H) {
+    var r = coverRect(img.naturalWidth, img.naturalHeight, W, H);
+    ctx.save();
+    if (clipW != null) { ctx.beginPath(); ctx.rect(0, 0, clipW, H); ctx.clip(); }
+    ctx.globalAlpha = L.op / 100;
+    ctx.globalCompositeOperation = bm;
+    ctx.translate(W / 2 + L.x / 100 * W, H / 2 + L.y / 100 * H);
+    ctx.scale(L.s / 100, L.s / 100);
+    ctx.translate(-W / 2, -H / 2);
+    ctx.drawImage(img, r.x, r.y, r.w, r.h);
+    ctx.restore();
+  }
+
+  document.getElementById('bExport').addEventListener('click', function () {
+    var W = 1672, H = 941;
+    if (!img0.naturalWidth || !img1.naturalWidth || !img3.naturalWidth) { toast('图片还没加载完'); return; }
+
+    var cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    var ctx = cv.getContext('2d');
+
+    var single = (S.view === 'bg1' || S.view === 'bg3');
+    var wiping = (S.view === 'all' && S.wipe < 100);
+    var cut = W * S.wipe / 100;
+
+    // bg0
+    if (!single) ctx.drawImage(img0, 0, 0, W, H);
+
+    // 层序：bg3 在下时先画
+    var drawB1 = function () {
+      if (S.view === 'bg0' || S.view === 'bg3') return;
+      var c = (wiping && (S.wt === 'all' || S.wt === 'bg1')) ? cut : null;
+      drawLayer(ctx, img1, S.bg1, 'source-over', c, W, H);
+    };
+    var drawB3 = function () {
+      if (S.view === 'bg0' || S.view === 'bg1') return;
+      var c = (wiping && (S.wt === 'all' || S.wt === 'bg3')) ? cut : null;
+      var bm = single ? 'normal' : S.bg3.bm;
+      drawLayer(ctx, img3, S.bg3, CANVAS_BM[bm] || 'source-over', c, W, H);
+    };
+
+    if (S.z === 'top') { drawB1(); drawB3(); } else { drawB3(); drawB1(); }
+
+    try {
+      var a = document.createElement('a');
+      a.href = cv.toDataURL('image/png');
+      a.download = 'atri-wallpaper-' + W + 'x' + H + '.png';
+      a.click();
+      toast('已导出 ' + W + '×' + H + ' PNG（' + S.bg3.bm + ' 混合）');
+    } catch (err) {
+      toast('导出被浏览器拦截，请用本地服务器打开本页');
+    }
+  });
+
+  apply();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,723 @@
+/* ============================================================
+   ATRI-bot · 布局
+   容器 / 导航 / 首屏 / 页脚 / 海平线
+   ============================================================ */
+
+.wrap{
+  width:100%;max-width:var(--maxw);margin-inline:auto;
+  padding-inline:24px;
+}
+
+/* ============================================================
+   导航
+   左：品牌（icon + 标题）→ GitHub → 分隔线 → 昼夜开关
+   右：首页 / 作品集 / 支持 / 联系
+   ============================================================ */
+.site-nav{
+  position:fixed;top:0;left:0;right:0;z-index:var(--z-nav);
+  border-bottom:1px solid transparent;
+  transition:background var(--dur-2) var(--ease-sea),
+             border-color var(--dur-2) var(--ease-sea),
+             backdrop-filter var(--dur-2) var(--ease-sea);
+}
+.site-nav__inner{
+  /* 全宽，不居中：品牌 / GitHub / 昼夜开关贴屏幕最左边，导航项自然被推到右边。
+     （旧版用 max-width:var(--maxw) 居中，宽屏下左边会空出一大块。） */
+  width:100%;
+  padding:14px var(--gutter);
+  display:flex;align-items:center;gap:var(--space-3);
+}
+.site-nav.solid{
+  background:var(--nav-solid);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border-bottom-color:var(--line-color);
+}
+
+/* ── 品牌 ────────────────────────────────────────────── */
+.brand{
+  display:flex;align-items:center;gap:10px;flex:none;
+  font-family:var(--font-display);font-size:17px;font-weight:700;
+  letter-spacing:.06em;color:var(--fg);
+}
+.brand__mark{
+  position:relative;width:34px;height:34px;flex:none;display:block;
+}
+.brand__mark img{width:100%;height:100%;object-fit:contain}
+.brand__mark::after{
+  content:"";position:absolute;inset:-6px;border-radius:var(--r-pill);
+  background:radial-gradient(circle,rgba(251,228,207,.30),transparent 68%);
+  opacity:0;transition:opacity var(--dur-2) var(--ease-sea);
+}
+.brand:hover .brand__mark::after{opacity:1}
+
+/* ── 工具栏图标（GitHub / 昼夜开关）──────────────────── */
+.nav__icon{
+  width:36px;height:36px;flex:none;display:grid;place-items:center;
+  color:var(--fg-muted);
+  transition:color var(--dur-2) var(--ease-sea),
+             background var(--dur-2) var(--ease-sea);
+}
+.nav__icon:hover{color:var(--accent);background:var(--wash)}
+.ico{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.4;
+  stroke-linecap:butt;stroke-linejoin:miter}
+.ico--fill{fill:currentColor;stroke:none}
+
+/* 昼夜开关显示的是「点了会去哪个主题」，所以两个图标按当前极性互斥 */
+.ico--sun{display:none}
+html[data-polarity="night"] .ico--sun{display:block}
+html[data-polarity="night"] .ico--moon{display:none}
+
+/* 分隔线：把「品牌区」和导航区在视觉上分开 */
+.nav__sep{
+  width:1px;height:18px;flex:none;margin-inline:2px;
+  background:var(--line-color-strong);
+}
+
+/* ── 右侧导航 ────────────────────────────────────────── */
+.nav{display:flex;margin-left:auto;min-width:0}
+.nav__list{display:flex;align-items:center;gap:var(--space-2)}
+.nav__link{
+  position:relative;display:block;padding:8px 12px;
+  font-size:14px;letter-spacing:.14em;color:var(--fg-muted);
+  transition:color var(--dur-2) var(--ease-sea);
+}
+/* 选中反馈：一条线从左端展开（§8.1）
+   · hover  → --accent（青蓝），像水面上被划开的一道
+   · active → --accent-warm（暖白／暖棕），也就是「当前页」
+   用 scaleX 而不是 width —— 后者每帧都要重排；
+   transform-origin:left 让它从左侧长出来，而不是从中间撑开。 */
+.nav__link::after{
+  content:"";position:absolute;left:12px;right:12px;bottom:4px;height:1px;
+  background:var(--accent);
+  transform:scaleX(0);transform-origin:left;
+  transition:transform var(--dur-2) var(--ease-sea),
+             background var(--dur-2) var(--ease-sea);
+}
+.nav__link:hover{color:var(--fg)}
+.nav__link:hover::after{transform:scaleX(1)}
+.nav__link.is-active{color:var(--accent-warm)}
+.nav__link.is-active::after{transform:scaleX(1);background:var(--accent-warm)}
+
+/* 招牌交互 · 水面倒影
+   scaleY(-1) 之后元素的「局部底部」在视觉上方，所以 mask 要 to bottom */
+.nav__label{position:relative;display:block}
+.nav__mirror{
+  position:absolute;left:0;right:0;top:100%;
+  display:block;transform:scaleY(-1);opacity:0;pointer-events:none;
+  -webkit-mask-image:linear-gradient(to bottom,transparent 25%,rgba(0,0,0,.85) 100%);
+          mask-image:linear-gradient(to bottom,transparent 25%,rgba(0,0,0,.85) 100%);
+  transition:opacity var(--dur-3) var(--ease-sea);
+}
+.nav__link:hover .nav__mirror{opacity:.42}
+.nav__link.is-active .nav__mirror{opacity:.55}
+@keyframes ripple{
+  0%,100%{transform:scaleY(-1) translateY(0) skewX(0deg)}
+  28%    {transform:scaleY(-1) translateY(-.5px) skewX(.7deg)}
+  64%    {transform:scaleY(-1) translateY(.4px) skewX(-.6deg)}
+}
+.nav__link:hover .nav__mirror{animation:ripple 2.4s var(--ease-sea) infinite}
+
+/* ============================================================
+   首屏
+   左栏文案 / 右栏立绘（§4.4 与 §5：立绘只放首屏右侧，< 900px 隐藏）
+   ============================================================ */
+.hero{
+  position:relative;
+  padding:168px 0 var(--sec-py);   /* 上边距给固定导航留位置 */
+}
+.hero__grid{
+  display:grid;
+  grid-template-columns:minmax(0,1.12fr) minmax(0,.88fr);
+  align-items:center;
+  gap:var(--space-8);
+}
+.hero__text{min-width:0}
+.hero__title{
+  font-family:var(--font-display);
+  font-size:var(--fs-hero);font-weight:700;
+  line-height:1.04;letter-spacing:.02em;
+  margin-bottom:var(--space-4);
+}
+.hero__kana{
+  font-family:var(--font-jp);
+  font-size:clamp(15px,1.7vw,21px);
+  letter-spacing:.20em;color:var(--fg-faint);
+  margin-bottom:var(--space-7);
+}
+.hero__lede{
+  max-width:46em;color:var(--fg-muted);
+  font-size:clamp(16px,1.35vw,18.5px);
+  margin-bottom:var(--space-7);
+}
+.hero__cta{display:flex;flex-wrap:wrap;gap:var(--space-4)}
+
+/* ── 立绘 ────────────────────────────────────────────── */
+.hero__art{
+  margin:0;min-width:0;
+  display:flex;justify-content:center;align-items:flex-end;
+}
+.hero__art img{
+  width:100%;max-width:380px;height:auto;display:block;
+  /* 「从海里升起来」——下缘化进背景。只让出最末尾一小段，
+     不然会连鞋子一起吃掉（§5 禁止裁切头部以下，脚下留白同理）*/
+  -webkit-mask-image:linear-gradient(to top,transparent,#000 10%);
+          mask-image:linear-gradient(to top,transparent,#000 10%);
+  animation:atriFloat 22s var(--ease-quiet) infinite;   /* §8.4 待机动效 */
+}
+@keyframes atriFloat{
+  0%,100%{transform:translateY(0)}
+  50%    {transform:translateY(-6px)}
+}
+
+/* ============================================================
+   作品集（§6.12）
+   ============================================================ */
+.works{
+  position:relative;
+  padding:168px 0 var(--sec-py);   /* 上边距给固定导航留位置 */
+}
+
+/* ── 页头 ────────────────────────────────────── */
+.works-hero{margin-bottom:var(--space-9)}
+.works-hero__k{
+  font-family:var(--font-mono);font-size:var(--fs-label);
+  letter-spacing:.22em;color:var(--fg-faint);
+  margin-bottom:var(--space-4);
+}
+.works-hero__title{
+  font-family:var(--font-display);
+  font-size:var(--fs-h1);font-weight:700;
+  line-height:1.14;letter-spacing:.02em;
+  margin-bottom:var(--space-5);
+}
+.works-hero__lede{
+  max-width:46em;color:var(--fg-muted);
+  font-size:clamp(16px,1.35vw,18.5px);
+}
+
+/* ── 画廊 ────────────────────────────────────── */
+/* 作品集里的小节标题（目前只有「宝箱」用）。
+   原来叫 .works-gallery__title，但画廊自己已经没有可见标题了，
+   这个名字会误导，改成中性名。 */
+.works-h2{
+  font-size:var(--fs-h2);font-weight:700;letter-spacing:.02em;
+  /* 直接接内容（没有说明行缓冲），所以间距自己给够 */
+  margin-bottom:var(--space-5);
+}
+
+/* 用原生横向 scroll-snap，不用旧版那个 3D 旋转门：
+   · 键盘 / 触摸 / 滚轮原生可用，能聚焦、能操作
+   · 尊重 prefers-reduced-motion
+   · 零依赖（旧版要 jQuery + GSAP 两个 CDN）
+   · 不会像那套 `-webkit-box-reflect` 一样在 Firefox 上整块消失
+     （非标准属性，不支持时不是降级，是不显示）
+
+   旧版还把平移量写成 35vw 而面板宽有 640px 上限 —— 闭合正三棱柱
+   需要「平移 = 宽 / 2√3」（640px → 185px），1920 宽下 35vw = 672px，
+   差 3.6 倍，所以那三块从来没接上过，而且越宽漂越远。
+   现在卡片宽就是吸附步长，不存在这个脱钩。 */
+.gallery{
+  /* 一张卡片的宽度：桌面 720px（= 素材 1440 ÷ 2 DPR），窄屏占满 */
+  --gw:min(720px,100%);
+  --gallery-pad:calc((100% - var(--gw)) / 2);
+}
+.gallery__track{
+  display:flex;
+  gap:var(--space-5);
+  overflow-x:auto;overflow-y:hidden;
+  overscroll-behavior-x:contain;
+  scroll-snap-type:x mandatory;
+  scroll-behavior:smooth;
+  /* 两侧各留 (容器 - 卡片)/2，卡片便落在正中、邻卡自然露边。
+     scroll-padding 必须与 padding 一致，卡片才能「吸附到居中」
+     而不是贴着左缘 —— 这是居中轮播的标配写法。 */
+  padding-inline:var(--gallery-pad);
+  scroll-padding-inline:var(--gallery-pad);
+  padding-block:2px;                /* 给 focus 轮廓留出上下余量 */
+}
+.gallery__track:focus-visible{outline:2px solid var(--accent);outline-offset:6px}
+
+.gallery__item{
+  flex:0 0 var(--gw);
+  min-width:0;margin:0;
+  scroll-snap-align:start;
+  scroll-snap-stop:always;          /* 快速甩动也只翻一张 */
+  transition:opacity var(--dur-3) var(--ease-sea);
+}
+.gallery__frame{
+  border:1px solid var(--line-color);
+  background:var(--bg-panel-alt);
+  line-height:0;                    /* 去掉行盒在图片下留的缝 */
+  overflow:hidden;
+}
+.gallery__img{
+  display:block;width:100%;height:auto;
+  aspect-ratio:16/9;object-fit:cover;
+}
+
+.gallery__cap{
+  display:grid;grid-template-columns:auto 1fr;
+  gap:var(--space-4);align-items:baseline;
+  padding-top:var(--space-4);
+}
+.gallery__no{
+  font-family:var(--font-mono);font-size:var(--fs-label);
+  letter-spacing:.20em;color:var(--accent);
+}
+.gallery__caption{color:var(--fg);font-size:var(--fs-sm);margin:0}
+.gallery__credit{color:var(--fg-muted);font-size:var(--fs-xs);margin:2px 0 0}
+
+/* 控件：默认藏起来，等 JS 接上才显示 —— 免得没 JS 时留个按不动的按钮。
+   同理，JS 没跑时不隐藏原生滚动条（那是唯一能翻页的手柄）。 */
+.gallery__bar{display:none}
+.gallery.is-live .gallery__bar{
+  display:flex;align-items:center;justify-content:center;
+  gap:var(--space-5);margin-top:var(--space-6);
+}
+.gallery.is-live .gallery__track{scrollbar-width:none;-ms-overflow-style:none}
+.gallery.is-live .gallery__track::-webkit-scrollbar{display:none}
+/* 邻卡压暗、当前卡提亮。同样只在 is-live 下生效，
+   否则没 JS 时会留下半透明的内容。 */
+.gallery.is-live .gallery__item:not(.is-current){opacity:.5}
+
+.gallery__btn{
+  width:38px;height:38px;flex:none;
+  display:grid;place-items:center;
+  color:var(--fg-muted);background:none;
+  border:1px solid var(--line-color);
+  border-radius:var(--r-1);          /* 少女声部：极硬，不用胶囊 */
+  cursor:pointer;
+  transition:color var(--dur-1),background var(--dur-1),border-color var(--dur-1);
+}
+.gallery__btn:hover:not([disabled]){
+  color:var(--accent);border-color:var(--line-color-accent);background:var(--wash-accent);
+}
+.gallery__btn[disabled]{opacity:.32;cursor:not-allowed}
+.gallery__ico{
+  width:15px;height:15px;fill:none;stroke:currentColor;
+  stroke-width:1.5;stroke-linecap:butt;
+}
+.gallery__ico--flip{transform:scaleX(-1)}
+.gallery__count{
+  font-family:var(--font-mono);font-size:var(--fs-label);
+  letter-spacing:.18em;color:var(--fg-faint);
+  min-width:6.5em;text-align:center;margin:0;
+}
+.gallery__count b{color:var(--fg);font-weight:400}
+
+/* 把平滑滚动关掉（base.css 那条只管到 html，管不到这里的滚动容器）
+   —— 系统设了减少动效时，翻页应该直接跳过去 */
+@media (prefers-reduced-motion:reduce){
+  .gallery__track{scroll-behavior:auto}
+}
+
+/* ── 宝箱（小游戏奖励）─────────────────────────────
+   默认带 hidden（HTML 上），由 reward.js 揭示。
+   这里不设 display，否则会盖掉 [hidden] 的 display:none。 */
+.works-reward{margin-top:var(--space-9)}
+.works-reward:not([hidden]){
+  animation:rewardIn var(--dur-3) var(--ease-sea) both;
+}
+@keyframes rewardIn{
+  from{opacity:0;transform:translateY(18px)}
+}
+
+.reward{
+  display:flex;flex-wrap:wrap;align-items:center;
+  gap:var(--space-4) var(--space-5);
+  padding:var(--space-5);
+  border:1px solid var(--line-color);
+  background:var(--bg-panel-alt);
+}
+.reward__play{
+  display:inline-flex;align-items:center;gap:var(--space-3);
+  height:44px;padding:0 var(--space-5);flex:none;
+  color:var(--fg);background:var(--wash-accent);
+  border:1px solid var(--line-color-accent);
+  border-radius:var(--r-1);          /* 少女声部：极硬，不用胶囊 */
+  font-family:var(--font-display);font-size:var(--fs-sm);
+  cursor:pointer;
+  transition:border-color var(--dur-1),background var(--dur-1);
+}
+.reward__play:hover{border-color:var(--accent)}
+.reward__ico{width:15px;height:15px;fill:currentColor;stroke:none;flex:none}
+.reward__ico--pause{display:none}
+.reward.is-playing .reward__ico--play{display:none}
+.reward.is-playing .reward__ico--pause{display:block}
+/* 把下载推到右边；窄屏换行时它自己占一行 */
+.reward__meta{margin-right:auto;min-width:0}
+.reward__title{font-size:var(--fs-body);color:var(--fg);margin:0}
+.reward__sub{font-size:var(--fs-sm);color:var(--fg-muted);margin:2px 0 0}
+
+/* ============================================================
+   文档（§6.14）
+   两栏：侧边栏（左，粘滞）+ 正文（右）。
+   ============================================================ */
+.docs{
+  position:relative;
+  /* 上边距给固定导航留位置。导航实测高 72px（<640px 时 66–81px），
+     所以 120px 下方净空约 48px。
+     ❗别照抄 hero 的 168px —— 那是落地页，宽窄的留白是故意的；
+       文档是查阅型页面，正文该尽快进入视野。用户反馈「上方的空白区域有点大」。 */
+  padding:120px 0 var(--sec-py);
+}
+.docs__layout{
+  /* 全宽两栏：侧边栏贴屏幕最左边（与导航栏的品牌左缘对齐），
+     正文接在它后面。**不能挂 .wrap** —— 那个 max-width 会把整块拉回居中，
+     侧边栏就跟着退到中间去了。 */
+  display:grid;
+  grid-template-columns:216px minmax(0,1fr);
+  gap:var(--space-8);
+  padding-inline:var(--gutter);
+  align-items:start;               /* 别让侧边栏被拉高到和正文一样长 */
+}
+/* 正文限宽。限在 .docs__article 而不是 .doc-body 上：
+   h2 的上边框、lede 的下边框都挂在 article 这一层，
+   只限 .doc-body 的话那两条横线会拉到整个宽栏那么长。 */
+.docs__article{max-width:46em}
+
+/* ── 侧边栏 ────────────────────────────────────
+   粘滞在固定导航之下。用 top 而不是「吸顶到 0」—— 否则侧边栏
+   会滑到导航底下被盖住。 */
+.docs-nav{
+  position:sticky;
+  top:104px;
+  max-height:calc(100vh - 140px);
+  overflow-y:auto;
+  padding-right:var(--space-2);
+}
+.docs-nav__k{
+  font-family:var(--font-mono);font-size:var(--fs-label);
+  letter-spacing:.22em;color:var(--fg-faint);
+  margin:0 0 var(--space-3);
+}
+.docs-nav__k--sub{margin-top:var(--space-6)}
+.docs-nav__pages,.docs-nav__secs{margin:0;padding:0;list-style:none}
+
+/* 页面链接：左边一条竖线就是指示器，沿用全站「发丝线」的语言。
+   当前页用暖色（与导航栏的 .is-active 一致） */
+.docs-nav__page{
+  display:block;padding:7px 0 7px 12px;
+  border-left:1px solid var(--line-color);
+  color:var(--fg-muted);font-size:var(--fs-sm);
+  transition:color var(--dur-1),border-left-color var(--dur-1);
+}
+.docs-nav__page:hover{color:var(--fg);border-left-color:var(--line-color-strong)}
+.docs-nav__page.is-current{
+  color:var(--accent-warm);border-left-color:var(--accent-warm);
+}
+
+/* 本页章节锚点：再缩一级，二级标题再缩进一格 */
+.docs-nav__sec{
+  display:block;padding:4px 0 4px 12px;
+  border-left:1px solid transparent;
+  color:var(--fg-faint);font-size:var(--fs-xs);line-height:1.5;
+  transition:color var(--dur-1);
+}
+.docs-nav__sec--h3{padding-left:24px}
+.docs-nav__sec:hover{color:var(--accent)}
+
+/* ── 正文 ────────────────────────────────────── */
+.docs__k{
+  font-family:var(--font-mono);font-size:var(--fs-label);
+  letter-spacing:.22em;color:var(--fg-faint);
+  margin-bottom:var(--space-4);
+}
+.docs__title{
+  font-family:var(--font-display);
+  font-size:var(--fs-h1);font-weight:700;
+  line-height:1.14;letter-spacing:.02em;
+  margin-bottom:var(--space-5);
+}
+.docs__lede{
+  max-width:46em;color:var(--fg-muted);
+  font-size:clamp(16px,1.35vw,18.5px);
+  padding-bottom:var(--space-6);
+  border-bottom:1px solid var(--line-faint);
+}
+
+/* 长文限宽。不限的话每行 60+ 汉字，读到第二行就丢行。
+   （限宽主要在 .docs__article 上，这里再写一道作为兼底。） */
+.doc-body{max-width:46em}
+
+.doc-body h2{
+  font-size:var(--fs-h2);font-weight:700;letter-spacing:.02em;
+  margin:var(--space-8) 0 var(--space-4);
+  padding-top:var(--space-5);
+  border-top:1px solid var(--line-faint);
+  /* 固定导航会盖住锚点目标，scroll-margin-top 把落点推下来。
+     这是纯 CSS 的 —— 不需要 JS 算偏移。 */
+  scroll-margin-top:104px;
+}
+.doc-body h2:first-child{margin-top:0;padding-top:0;border-top:0}
+.doc-body h3{
+  font-size:var(--fs-h3);font-weight:700;letter-spacing:.02em;
+  margin:var(--space-6) 0 var(--space-3);
+  scroll-margin-top:104px;
+}
+.doc-body p{margin:0 0 var(--space-4);color:var(--fg-muted);line-height:1.85}
+.doc-body strong{color:var(--fg);font-weight:700}
+
+/* 全局把 ul/ol 的 list-style 关了（base.css），正文里要自己接管标记。
+   用一条 5px 短横而不是圆点 —— 呼应全站的硬边与发丝线。 */
+.doc-body ul,.doc-body ol{margin:0 0 var(--space-4);padding:0;list-style:none}
+.doc-body li{
+  position:relative;padding-left:1.15em;
+  margin-bottom:var(--space-2);
+  color:var(--fg-muted);line-height:1.85;
+}
+.doc-body ul>li::before{
+  content:"";position:absolute;left:0;top:.85em;
+  width:5px;height:1px;background:var(--accent);
+}
+.doc-body ol{counter-reset:doc-ol}
+.doc-body ol>li{padding-left:2em;counter-increment:doc-ol}
+.doc-body ol>li::before{
+  content:counter(doc-ol,decimal-leading-zero);
+  position:absolute;left:0;top:.1em;
+  font-family:var(--font-mono);font-size:var(--fs-label);
+  letter-spacing:.06em;color:var(--accent);
+}
+
+/* 行内代码 */
+.doc-body code{
+  font-size:.9em;color:var(--accent);
+  background:var(--wash);
+  padding:.12em .4em;
+}
+/* 代码块。--bg-code 两套极性都是深底，所以文字用固定的 --fg-code */
+.doc-pre{
+  margin:0 0 var(--space-5);
+  padding:var(--space-5);
+  background:var(--bg-code);
+  border:1px solid var(--line-color);
+  overflow-x:auto;
+  font-size:var(--fs-code);line-height:1.7;
+  tab-size:4;
+}
+.doc-pre code{background:none;padding:0;color:var(--fg-code);font-size:inherit}
+
+/* 表格。窄屏不拆成卡片，改为整块横向滚动 ——
+   环境变量表有三列，拆卡会把「变量 / 说明 / 默认值」拆散反而难读。 */
+.doc-table{margin:0 0 var(--space-5);overflow-x:auto}
+.doc-table table{border-collapse:collapse;width:100%;font-size:var(--fs-sm)}
+.doc-table th,.doc-table td{
+  text-align:left;vertical-align:top;
+  padding:var(--space-3) var(--space-4);
+  border-bottom:1px solid var(--line-faint);
+}
+.doc-table th{
+  font-family:var(--font-mono);font-size:var(--fs-label);
+  font-weight:400;letter-spacing:.14em;color:var(--accent);
+  border-bottom-color:var(--line-color-strong);
+  white-space:nowrap;                /* 表头不拆行 */
+}
+.doc-table td{color:var(--fg-muted);line-height:1.7}
+.doc-table tr:last-child td{border-bottom:0}
+
+/* 提示条：沿用 .callout 的左边线语言 */
+.doc-note{
+  margin:0 0 var(--space-5);
+  padding:var(--space-2) 0 var(--space-2) var(--space-4);
+  border-left:3px solid var(--accent-warm);
+}
+.doc-note p{margin:0;color:var(--fg-muted);font-size:var(--fs-sm);line-height:1.75}
+
+/* 正文里的外链与独立的链接行 */
+.doc-body a,.doc-link a{
+  color:var(--accent);
+  border-bottom:1px solid var(--line-color-accent);
+  transition:border-bottom-color var(--dur-1);
+}
+.doc-body a:hover,.doc-link a:hover{border-bottom-color:var(--accent)}
+.doc-link{margin:0 0 var(--space-5)}
+.doc-link a{font-size:var(--fs-sm)}
+
+@media (max-width:899px){
+  .docs{padding-top:110px}
+  /* 窄屏塌成一栏。侧边栏不再粘滞（否则会占着屏幕顶），
+     页面链接排成一行可横滑，「本页」锚点列表整块隐藏 ——
+     那是七八个链接的纵向块，会在正文之前先堆掉一整屏。 */
+  .docs__layout{grid-template-columns:minmax(0,1fr);gap:var(--space-5)}
+  .docs__article{max-width:46em}
+  .docs-nav{
+    position:static;max-height:none;overflow:visible;
+    padding:0 0 var(--space-4);
+    border-bottom:1px solid var(--line-faint);
+  }
+  .docs-nav__pages{display:flex;gap:var(--space-2);overflow-x:auto}
+  .docs-nav__page{
+    border-left:0;border-bottom:1px solid var(--line-color);
+    padding:6px 10px;white-space:nowrap;
+  }
+  .docs-nav__page:hover{border-left-color:transparent}
+  .docs-nav__page.is-current{border-bottom-color:var(--accent-warm)}
+  .docs-nav__k--sub,.docs-nav__secs{display:none}
+  .docs-nav__k{margin-bottom:var(--space-2)}
+}
+
+/* ============================================================
+   整页状态面板（404 / 空页共用）
+   用吉祥物声部（§6.11）：Q 版形象 + 一句台词 + 一个出口。
+
+   · 404 页 —— **error** 态。这也是 Cloudflare Pages 的**唯一兑底**：
+     不放 404.html，CF 会把全站当 SPA，未匹配的路径一律回落到首页
+     （200 而非 404），网址打错会静默显示首页，用户根本不知道自己走错了。
+   · 空页（支持 / 联系）—— **empty** 态。页面是**找得到**的，只是内容还没写，
+     所以不能套 404 的「你走错了」，要用 empty 的「这里还空着」。
+     归因不同，表情与文案都要换。
+
+   两者版式完全一致，所以共用一个类；差别只在 `.state--error` / `--empty`、
+   文案，以及 404 多一行路径回显。
+   ============================================================ */
+.page-state{
+  padding:168px 0 var(--sec-py);
+  min-height:70vh;
+  display:grid;place-items:center;
+  /* 整页状态下立绘放大 25%（88 → 110px）：这一屏只有这一张图、文案也短，
+     放大后视觉重心更稳。组件内嵌的 .state 仍用规范里的 88px。 */
+  --state-art:110px;
+}
+.page-state__inner{
+  display:grid;gap:var(--space-7);justify-items:center;text-align:center;
+}
+.page-state__cta{display:flex;flex-wrap:wrap;gap:var(--space-4);justify-content:center}
+/* 把请求的路径回显出来 —— 打错字母时一眼就能看出来（仅 404 有） */
+.page-state__path{
+  font-family:var(--font-mono);font-size:var(--fs-label);
+  letter-spacing:.10em;color:var(--fg-faint);
+  word-break:break-all;max-width:34em;
+}
+
+/* ============================================================
+   海平线
+   ============================================================ */
+.horizon{
+  height:1px;margin:0;
+  background:linear-gradient(90deg,transparent,
+    var(--line-color-strong) 12%,var(--line-color-accent) 50%,
+    var(--line-color-strong) 88%,transparent);
+}
+.horizon--dot{display:flex;align-items:center;gap:var(--space-4)}
+.horizon--dot::before,.horizon--dot::after{
+  content:"";flex:1;height:1px;
+  background:linear-gradient(90deg,transparent,
+    var(--line-color-strong) 30%,var(--line-color-accent) 100%);
+}
+.horizon--dot::after{
+  background:linear-gradient(270deg,transparent,
+    var(--line-color-strong) 30%,var(--line-color-accent) 100%);
+}
+.horizon--dot i{width:3px;height:3px;flex:none;background:var(--accent);
+  transform:rotate(45deg)}
+
+/* ============================================================
+   页脚
+   ============================================================ */
+.site-footer{
+  padding:var(--space-8) 0 var(--space-6);
+  border-top:1px solid var(--line-faint);
+}
+.site-footer__brand{
+  display:flex;align-items:center;gap:10px;
+  font-family:var(--font-display);font-size:15px;font-weight:700;
+  letter-spacing:.06em;color:var(--fg);
+  margin-bottom:var(--space-3);
+}
+.site-footer__brand img{width:28px;height:28px;object-fit:contain}
+.site-footer__kana{
+  font-family:var(--font-jp);font-size:12px;
+  letter-spacing:.18em;color:var(--fg-faint);
+}
+.site-footer__bottom{
+  display:flex;flex-wrap:wrap;gap:var(--space-2) var(--space-6);
+  margin-top:var(--space-6);
+  padding-top:var(--space-5);
+  border-top:1px solid var(--line-faint);
+  font-family:var(--font-mono);font-size:11.5px;letter-spacing:.10em;
+  color:var(--fg-faint);
+}
+
+/* ============================================================
+   跨页平移转场（§8.6）
+   只推「内容」——海面 / 星点 / 遮罩 / 导航都是 fixed，
+   一旦被 transform 的祖先接住，"fixed" 就会改成相对那个祖先定位，整块背景会跟着飞走。
+   导航故意不动：它在四页上完全一致，钉住反而让内容像在它下面滑动，像换水而不像换页。
+   ============================================================ */
+@keyframes navPushOutLeft { to{transform:translateX(calc(-1 * var(--shift-nav)));opacity:0} }
+@keyframes navPushOutRight{ to{transform:translateX(var(--shift-nav));opacity:0} }
+@keyframes navPushInRight  { from{transform:translateX(var(--shift-nav));opacity:0} }
+@keyframes navPushInLeft   { from{transform:translateX(calc(-1 * var(--shift-nav)));opacity:0} }
+/* 文档页之间用交叉淡化（与 View Transitions 那一路的
+   vtFadeOut / vtFadeIn 对应）。这里不带位移，只有透明度。 */
+@keyframes navFadeIn { from{opacity:0} }
+
+/* ❗淡化只作用于**正文**，不是整页。
+   换的是同一篇文档里的一个小节，而导航栏 / 侧边栏 / 背景两页本来就一样 ——
+   把它们也淡一遍，观感就是「整个页面换了一次」，也就是翻页感。
+   也没有「淡出」：两段式回退里淡出整页再淡入会闪一下。
+   离场直接跳，见 transition.js。 */
+.docs__article{
+  /* 命名之后它会在 View Transitions 里单独成一组，
+     从而与 root 分开做淡化（root 那一路不映，见 base.css）。
+     必须无条件声明 —— 旧页的快照也要靠它把正文分离出来。 */
+  view-transition-name:doc-article;
+}
+html[data-nav-in="fade"] .docs__article{
+  animation:navFadeIn var(--dur-nav-fade) var(--ease-sea) both;
+}
+
+html[data-nav-in="forward"] :is(.hero,.works,.docs,.page-state,.site-footer){
+  animation:navPushInRight var(--dur-nav-in) var(--ease-sea) both;
+  will-change:transform,opacity;
+}
+html[data-nav-in="back"] :is(.hero,.works,.docs,.page-state,.site-footer){
+  animation:navPushInLeft var(--dur-nav-in) var(--ease-sea) both;
+  will-change:transform,opacity;
+}
+html.is-leaving[data-nav-out="forward"] :is(.hero,.works,.docs,.page-state,.site-footer){
+  animation:navPushOutLeft var(--dur-nav-out) var(--ease-sea) both;
+  will-change:transform,opacity;
+}
+html.is-leaving[data-nav-out="back"] :is(.hero,.works,.docs,.page-state,.site-footer){
+  animation:navPushOutRight var(--dur-nav-out) var(--ease-sea) both;
+  will-change:transform,opacity;
+}
+
+/* 入场时元素先在视口**外**（forward 是 +--shift-nav），动画的头几帧会把 scrollWidth
+   撑大，于是冒出一条横向滚动条 —— 只有 forward 会，back 往左走不增加 scrollWidth。
+   只在转场期间裁掉横向溢出。用 clip 而不是 hidden：clip 不创建滚动容器，
+   也不会把另一轴的 visible 计算成 auto（那会悄悄改掉 sticky 的行为）。 */
+html[data-nav-in], html.is-leaving{ overflow-x:clip; }
+@supports not (overflow-x:clip){
+  html[data-nav-in], html.is-leaving{ overflow-x:hidden; }
+}
+
+/* 当前项的高亮是静态写在 HTML 上的，换页时会硬切。
+   给它一段淡入，让「哪一栏亮了」也跟着移动一下。 */
+@keyframes navActiveFade{ from{opacity:.30} to{opacity:1} }
+html[data-nav-in] .nav__link.is-active{animation:navActiveFade 700ms var(--ease-sea) both}
+
+/* ============================================================
+   响应式
+   ============================================================ */
+@media (max-width:899px){
+  .hero{padding-top:132px}
+  .hero__grid{grid-template-columns:minmax(0,1fr)}
+  .hero__art{display:none}      /* §7：立绘在 < 900px 隐藏，只留 Q 版 Logo */
+  .hero__lede{max-width:none}
+}
+@media (max-width:639px){
+  .site-nav__inner{gap:var(--space-2);padding:12px 20px}
+  .wrap{padding-inline:20px}
+  .brand__name{display:none}         /* 窄屏只留图标，把宽度让给导航 */
+  .nav__sep{display:none}
+  .nav{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .nav__list{gap:0}
+  /* 窄屏导航是横向滚动的 tab，下划线落到贴边处并加粗成 2px 指示条（§7） */
+  .nav__link{padding:8px 10px;white-space:nowrap;font-size:13px}
+  .nav__link::after{left:10px;right:10px;bottom:0;height:2px}
+  .nav__mirror{display:none}
+  .hero{padding-top:120px}
+  .hero__kana{letter-spacing:.12em}
+}

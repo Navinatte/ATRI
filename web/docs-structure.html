@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-polarity="night" data-veil="night">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>项目结构 · ATRI-bot</title>
+<meta name="description" content="各目录负责什么。">
+<meta name="color-scheme" content="dark light">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/img/ATRI-bot-icon-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/img/ATRI-bot-icon-180.png">
+<link rel="stylesheet" href="assets/css/tokens.css">
+<link rel="stylesheet" href="assets/css/base.css">
+<link rel="stylesheet" href="assets/css/layout.css">
+<link rel="stylesheet" href="assets/css/components.css">
+<script src="assets/js/theme.js"></script>
+<script src="assets/js/transition.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主内容</a>
+
+<div class="sea" aria-hidden="true"></div>
+<div class="stars" aria-hidden="true"></div>
+<div class="veil" aria-hidden="true"></div>
+
+<header class="site-nav" id="siteNav">
+ <div class="site-nav__inner">
+  <a class="brand" href="index.html" aria-label="ATRI-bot 首页">
+    <span class="brand__mark"><img src="assets/img/ATRI-bot-icon.png" alt=""></span>
+    <span class="brand__name">ATRI-bot</span>
+  </a>
+  <a class="nav__icon" href="https://github.com/114514ggb/ATRI-bot"
+     target="_blank" rel="noopener" aria-label="GitHub 仓库">
+    <svg class="ico ico--fill" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+  </a>
+  <span class="nav__sep" aria-hidden="true"></span>
+  <button class="nav__icon" id="themeToggle" type="button" aria-label="切换为白天主题">
+    <svg class="ico ico--sun" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="4.1"/>
+      <path d="M12 2.6v2.4M12 19v2.4M2.6 12h2.4M19 12h2.4M5.4 5.4l1.7 1.7M16.9 16.9l1.7 1.7M18.6 5.4l-1.7 1.7M7.1 16.9l-1.7 1.7"/>
+    </svg>
+    <svg class="ico ico--moon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M20.6 14.4A8.6 8.6 0 019.6 3.4a8.6 8.6 0 1011 11z"/>
+    </svg>
+  </button>
+  <nav class="nav" aria-label="主导航">
+    <ul class="nav__list">
+      <li><a class="nav__link" href="index.html"><span class="nav__label">首页<span class="nav__mirror" aria-hidden="true">首页</span></span></a></li>
+      <li><a class="nav__link is-active" href="docs.html"><span class="nav__label">文档<span class="nav__mirror" aria-hidden="true">文档</span></span></a></li>
+      <li><a class="nav__link" href="works.html"><span class="nav__label">作品集<span class="nav__mirror" aria-hidden="true">作品集</span></span></a></li>
+      <li><a class="nav__link" href="support.html"><span class="nav__label">支持<span class="nav__mirror" aria-hidden="true">支持</span></span></a></li>
+      <li><a class="nav__link" href="contact.html"><span class="nav__label">联系<span class="nav__mirror" aria-hidden="true">联系</span></span></a></li>
+    </ul>
+  </nav>
+ </div>
+</header>
+
+<main id="main" class="docs">
+  <div class="docs__layout">
+
+        <nav class="docs-nav" aria-label="文档导航">
+        <p class="docs-nav__k">文档</p>
+        <ul class="docs-nav__pages">
+        <li><a class="docs-nav__page" href="docs.html">概览</a></li>
+        <li><a class="docs-nav__page" href="docs-start.html">快速开始</a></li>
+        <li><a class="docs-nav__page is-current" aria-current="page" href="docs-structure.html">项目结构</a></li>
+        <li><a class="docs-nav__page" href="docs-arch.html">架构设计</a></li>
+        </ul>
+        <p class="docs-nav__k docs-nav__k--sub">本页</p>
+        <ul class="docs-nav__secs">
+        <li><a class="docs-nav__sec" href="#tree">目录</a></li>
+        </ul>
+        </nav>
+
+    <article class="docs__article">
+      <p class="docs__k" data-reveal>DOCS / 文档</p>
+      <h1 class="docs__title" data-reveal data-delay="1">项目结构</h1>
+      <p class="docs__lede" data-reveal data-delay="2">各目录负责什么。</p>
+      <div class="doc-body">
+        <h2 id="tree">目录</h2>
+        <p>仓库的整体结构如下。带注释说明的是各目录的职责。</p>
+        <pre class="doc-pre"><code>ATRI-main/
+        ├─main.py                       # 项目入口
+        ├─pyproject.toml                # Python 项目依赖与构建配置
+        ├─docker-compose.yml            # Docker Compose 启动配置
+        ├─.env.docker.example           # Docker 环境变量示例
+        ├─README.md / README.en.md      # 中英文说明文档
+        ├─requirements-*.txt            # 各平台依赖导出文件
+        ├─tests/                        # 单元测试与集成测试
+        ├─assets/                       # 配置文件与示例
+        ├─atribot/                      # 核心代码
+        │  ├─bot_framework.py           # Bot 初始化与服务装配入口
+        │  ├─C/                         # C 扩展模块（Levenshtein 距离等）
+        │  ├─commands/                  # 群聊命令实现
+        │  │  ├─audio/                  # 音频与 TTS 相关命令
+        │  │  ├─bromidic/               # 图片处理 / Token 查询等杂项功能命令
+        │  │  ├─interior/               # 内部管理与状态查询命令
+        │  │  └─test/                   # 实验性 / 测试命令
+        │  ├─common_utils/              # 通用工具函数
+        │  │  ├─cluster_utils.py        # 图聚类与连通分量分析
+        │  │  ├─data_manage.py          # 数据管理工具
+        │  │  ├─db_format.py            # 数据库格式化
+        │  │  ├─http_client.py          # 异步 HTTP 客户端
+        │  │  ├─json_utils.py           # JSON 处理与序列化
+        │  │  ├─message_utils.py        # 消息处理工具
+        │  │  ├─music.py                # 音乐分享工具
+        │  │  ├─request_header.py       # HTTP 请求头配置
+        │  │  ├─similarity.py           # 文本相似度计算
+        │  │  ├─timer.py                # 计时与限频工具
+        │  │  ├─validation.py           # 参数验证工具
+        │  │  └─file/                   # 文件、图片、文本处理
+        │  │     ├─file_utils.py        # 文件操作工具
+        │  │     ├─image_utils.py       # 图片处理与压缩
+        │  │     ├─media_utils.py       # 媒体文件处理
+        │  │     └─text_utils.py        # 文本清洗与格式化
+        │  ├─core/                      # 核心架构
+        │  │  ├─atri_config.py          # 配置加载与管理
+        │  │  ├─logger.py               # 日志系统
+        │  │  ├─service_container.py    # 依赖注入容器 (DIContainer)
+        │  │  ├─time_trigger.py         # 定时任务调度器
+        │  │  ├─cache/                  # 上下文缓存与生命周期管理
+        │  │  ├─command/                # 命令系统与权限管理
+        │  │  ├─db/                     # 数据库连接与数据访问
+        │  │  ├─event_bus/              # 事件总线（按 PostType 分发监听器）
+        │  │  ├─pipeline/               # 中间件管道（含群白名单 WhitelistMiddleware）
+        │  │  ├─platform/               # 多平台适配层（适配器 / 消息队列 / 发送客户端）
+        │  │  ├─network_connections/    # 发送客户端（QQAPIClient 等）
+        │  │  └─type/                   # 核心类型定义（事件信封 / 消息段）
+        │  ├─docs/                      # 开发文档与笔记
+        │  ├─LLMchat/                   # LLM 聊天与 Agent 能力
+        │  │  ├─chat.py                 # 群聊/私聊对话处理入口
+        │  │  ├─emoji_system.py         # 表情包管理与自然发送
+        │  │  ├─initiative_chat.py      # 主动发起群聊话题
+        │  │  ├─LLM_supervisor.py       # LLM 调度与降级策略
+        │  │  ├─media_processor.py      # 多模态消息转文本
+        │  │  ├─prepare_model_prompt.py # 提示词构建与组装
+        │  │  ├─token_manage.py         # Token 用量统计与管理
+        │  │  ├─agent/                  # 子 Agent 系统
+        │  │  ├─character_setting/      # 人设预设（15+ 角色）
+        │  │  ├─discard_tools/          # 已废弃 / 旧版工具
+        │  │  ├─MCP/                    # MCP 协议工具集成
+        │  │  │  ├─mcp_tool_manager.py  # MCP 工具管理器
+        │  │  │  ├─tool_calls.py        # 工具调用编排
+        │  │  │  ├─tool_executor.py     # 工具执行引擎
+        │  │  │  ├─tool_model.py        # 工具数据模型
+        │  │  │  └─local_mcp_tools/     # 本地 MCP 工具集
+        │  │  ├─memory/                 # 记忆系统
+        │  │  │  ├─memory_system.py     # 记忆系统门面
+        │  │  │  ├─memory_extractor.py  # LLM 记忆提取
+        │  │  │  ├─memory_retriever.py  # 向量 + 全文混合检索
+        │  │  │  ├─memory_consolidator.py # 记忆合并去重
+        │  │  │  ├─user_info_system.py  # 用户画像系统
+        │  │  │  └─prompts.py           # 记忆提示词模板
+        │  │  ├─model_api/              # 模型供应商接口
+        │  │  ├─RAG/                    # 检索增强生成（含 vector_store.py 向量存储）
+        │  │  ├─sandbox/                # 代码沙盒环境
+        │  │  ├─skills/                 # Agent Skills 管理
+        │  │  │  ├─skills_manager.py    # Skills 加载与管理
+        │  │  │  ├─validator.py         # YAML 属性验证
+        │  │  │  ├─parser.py            # Markdown 解析
+        │  │  │  ├─models.py            # 数据模型
+        │  │  │  └─agent_skills/        # Skills 提示词文件
+        │  │  └─tools/                  # 函数调用工具集（共 18 个）
+        │  │     ├─web_search/          # 网页搜索
+        │  │     ├─web_extract/         # 网页内容提取
+        │  │     ├─run_python_code/     # 沙盒 Python 执行
+        │  │     ├─run_command/         # 沙盒 Shell 命令
+        │  │     ├─memory_search/       # 记忆检索
+        │  │     ├─memory_storage/      # 记忆写入
+        │  │     ├─send_image_message/  # 图片消息发送
+        │  │     ├─send_speech_message/ # 语音消息发送
+        │  │     ├─send_file / add_file # 沙盒文件进出
+        │  │     ├─schedule_self_trigger # 定时自触发
+        │  │     ├─sub_agent/           # 子代理
+        │  │     ├─tool_search/         # 工具搜索与发现
+        │  │     ├─load_skill_prompt/   # Skills 提示词加载
+        │  │     └─...                  # 其余工具
+        │  ├─plugins/                   # 插件系统
+        │  │  ├─plugin.py               # Plugin 基类（事件 / 中间件装饰器）
+        │  │  ├─manager.py / loader.py  # 插件管理器与加载器（热重载）
+        │  │  ├─emoji_like/             # 消息贴表情镜像
+        │  │  ├─group_manager/          # 群管理 + 关键词回复 + 加群审批
+        │  │  └─poke_reaction/          # 戳一戳反馈
+        │  ├─log/                       # 运行时日志（每日轮转，保留 7 天）
+        │  └─web_panel/                 # Web 管理面板
+        │     ├─panel_router.py         # 面板路由挂载与静态资源
+        │     ├─deps.py                 # 鉴权 / 配置等共享依赖
+        │     ├─routes/                 # 后端端点（chat / config / database / memory / personas）
+        │     ├─templates/              # 页面模板
+        │     └─static/                 # 前端资源（JS / CSS）
+        ├─docker/                       # Docker 相关资源
+        │  ├─db/                        # 数据库初始化脚本与镜像文件
+        │  └─python/                    # Python 容器环境相关资源
+        ├─document/                     # 运行时资源目录
+        │  ├─audio/                     # 音频素材
+        │  ├─file/                      # 通用文本 / 文件资源
+        │  ├─img/                       # 图片资源
+        │  │  ├─ATRI_qrcode/            # 二维码资源
+        │  │  ├─emojis/                 # 表情包目录
+        │  │  └─tmp/                    # 临时图片目录
+        │  ├─video/                     # 视频资源
+        │  └─temp/                      # 临时运行文件</code></pre>
+      </div>
+    </article>
+
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="site-footer__brand">
+      <img src="assets/img/ATRI-bot-icon.png" alt="">
+      <span>ATRI-bot</span>
+    </div>
+    <p class="site-footer__kana" lang="ja">時よ止まれ、おまえは美しい</p>
+    <div class="site-footer__bottom">
+      <span>MIT LICENSE · © 2026 ATRI-BOT</span>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/js/nav.js"></script>
+<script src="assets/js/copy.js"></script>
+</body>
+</html>

@@ -338,10 +338,27 @@ class LLMCoordinator():
         self.log.debug("模型进入工具调用!")
         
         response = request.generation_response or GenerationResponse(model = request.model)
+        recent_round_snapshots: list[frozenset[tuple[tuple[str, str], str]]] = []
         
         for _ in range(10):#防止无限循环调用
             
             self._update_response(response, assistant_message)
+
+            # 无进展死循环检测:最近3轮的(签名,结果)快照完全一致才判定
+            if len(recent_round_snapshots) >= 3:
+                last3 = recent_round_snapshots[-3:]
+                if last3[0] == last3[1] == last3[2]:
+                    sample = ", ".join(
+                        f"{sig[0]}({sig[1][:60]})"
+                        for sig, _ in sorted(last3[2], key=lambda x: x[0][0])[:3]
+                    )
+                    self.log.warning(
+                        f"连续3轮工具调用签名与结果完全相同({sample}),"
+                        "判定为无进展死循环,提前结束本轮工具循环"
+                    )
+                    response.messages = increase_context.messages
+                    return response
+            
 
             for tool_call in tool_calls:#可能一次里面调用多少工具 
                 
@@ -385,7 +402,27 @@ class LLMCoordinator():
                     tool_call['id'],
                     tool_output,
                 )
-              
+            
+            # 记录本轮快照: 每个工具调用的(签名, 结果)对
+            round_snapshot: list[tuple[tuple[str, str], str]] = []
+            for tool_call in tool_calls:
+                try:
+                    sig = (tool_call['function']['name'], tool_call['function'].get('arguments', ''))
+                except (KeyError, TypeError):
+                    continue
+                result_preview = ""
+                # 从增量上下文尾部找对应的 tool 消息取结果预览
+                for msg in reversed(increase_context.messages):
+                    if msg.get("role") == "tool" and msg.get("tool_call_id") == tool_call.get('id'):
+                        result_content = msg.get("content", "")
+                        result_preview = result_content if isinstance(result_content, str) else str(result_content)
+                        break
+                round_snapshot.append((sig, result_preview[:200]))
+            if round_snapshot:
+                recent_round_snapshots.append(frozenset(round_snapshot))
+                if len(recent_round_snapshots) > 6:
+                    recent_round_snapshots.pop(0)
+
             try:
                 api_reply,assistant_message, content = await self._get_assistant_message_with_retry(
                     request = request,
@@ -412,6 +449,12 @@ class LLMCoordinator():
                     extra_content = assistant_message.get("extra_content")
                 )
                 break
+        else:
+            self.log.warning(
+                "工具调用循环已达上限(10轮)仍未产出正文回复,"
+                f"最后一条assistant消息字段: {sorted(assistant_message.keys())}, "
+                "本轮reply_text可能为空"
+            )
         
         self.log.debug("工具调用结束!")
         
@@ -729,6 +772,16 @@ class LLMCoordinator():
                 "tools":  tools,
                 **request.parameter
             }
+            # 携带工具时剥离 response_format:
+            # Gemini 系模型经 OpenAI 兼容层/json_object 模式会与 function calling 冲突,
+            # 实测工具参数被损坏(如 user_id=0)且模型陷入反复调工具不产出正文的死循环,
+            # 10轮耗尽后 reply_text 为空(表现为静默空回复)。
+            # 文本回复的 JSON 提取由 extract_json_from_text 兜底(支持markdown围栏/混杂文本/修复解析),
+            # 因此仅在无工具调用的请求上保留 json_object 约束。
+            if tools and "response_format" in parameter:
+                parameter.pop("response_format")
+                self.log.debug("已移除response_format(携带工具的请求不使用json_object模式)")
+
             if request.parameter.get('stream'):
                 return await model_api.generate_json_ample_stream(
                     model = request.model,

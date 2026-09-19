@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-polarity="night" data-veil="night">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>作品集 · ATRI-bot</title>
+<meta name="description" content="ATRI-bot 相关的插画与二创作品。">
+<meta name="color-scheme" content="dark light">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/img/ATRI-bot-icon-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/img/ATRI-bot-icon-180.png">
+<link rel="stylesheet" href="assets/css/tokens.css">
+<link rel="stylesheet" href="assets/css/base.css">
+<link rel="stylesheet" href="assets/css/layout.css">
+<link rel="stylesheet" href="assets/css/components.css">
+<script src="assets/js/theme.js"></script>
+<script src="assets/js/transition.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主内容</a>
+
+<div class="sea" aria-hidden="true"></div>
+<div class="stars" aria-hidden="true"></div>
+<div class="veil" aria-hidden="true"></div>
+
+<header class="site-nav" id="siteNav">
+ <div class="site-nav__inner">
+  <a class="brand" href="index.html" aria-label="ATRI-bot 首页">
+    <span class="brand__mark"><img src="assets/img/ATRI-bot-icon.png" alt=""></span>
+    <span class="brand__name">ATRI-bot</span>
+  </a>
+  <a class="nav__icon" href="https://github.com/114514ggb/ATRI-bot"
+     target="_blank" rel="noopener" aria-label="GitHub 仓库">
+    <svg class="ico ico--fill" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+  </a>
+  <span class="nav__sep" aria-hidden="true"></span>
+  <button class="nav__icon" id="themeToggle" type="button" aria-label="切换为白天主题">
+    <svg class="ico ico--sun" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="4.1"/>
+      <path d="M12 2.6v2.4M12 19v2.4M2.6 12h2.4M19 12h2.4M5.4 5.4l1.7 1.7M16.9 16.9l1.7 1.7M18.6 5.4l-1.7 1.7M7.1 16.9l-1.7 1.7"/>
+    </svg>
+    <svg class="ico ico--moon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M20.6 14.4A8.6 8.6 0 019.6 3.4a8.6 8.6 0 1011 11z"/>
+    </svg>
+  </button>
+  <nav class="nav" aria-label="主导航">
+    <ul class="nav__list">
+      <li><a class="nav__link" href="index.html"><span class="nav__label">首页<span class="nav__mirror" aria-hidden="true">首页</span></span></a></li>
+      <li><a class="nav__link" href="docs.html"><span class="nav__label">文档<span class="nav__mirror" aria-hidden="true">文档</span></span></a></li>
+      <li><a class="nav__link is-active" href="works.html"><span class="nav__label">作品集<span class="nav__mirror" aria-hidden="true">作品集</span></span></a></li>
+      <li><a class="nav__link" href="support.html"><span class="nav__label">支持<span class="nav__mirror" aria-hidden="true">支持</span></span></a></li>
+      <li><a class="nav__link" href="contact.html"><span class="nav__label">联系<span class="nav__mirror" aria-hidden="true">联系</span></span></a></li>
+    </ul>
+  </nav>
+ </div>
+</header>
+
+<main id="main" class="works">
+
+  <section class="works-hero">
+    <div class="wrap">
+      <p class="works-hero__k" data-reveal>WORKS / 作品</p>
+      <h1 class="works-hero__title" data-reveal data-delay="1">作品集</h1>
+    </div>
+  </section>
+
+  <section class="works-gallery">
+    <div class="wrap">
+      <div class="gallery" id="gallery">
+        <div class="gallery__track" id="galleryTrack" tabindex="0" role="group"
+             aria-label="作品插画，共 3 张">
+
+          <figure class="gallery__item">
+            <div class="gallery__frame">
+              <img class="gallery__img" src="assets/img/ATRI-bot-work-01.webp"
+                   width="1440" height="810" decoding="async"
+                   alt="深夜色调的亚托莉插画：红色眼瞳在暗部里发亮，画面右上角是一轮带红晕的月。">
+            </div>
+            <figcaption class="gallery__cap">
+              <span class="gallery__no" aria-hidden="true">01</span>
+            </figcaption>
+          </figure>
+
+          <figure class="gallery__item">
+            <div class="gallery__frame">
+              <img class="gallery__img" src="assets/img/ATRI-bot-work-02.webp"
+                   width="1440" height="810" loading="lazy" decoding="async"
+                   alt="明亮色调的亚托莉插画：侧脸与扬起的头发，身后铺满白色的蟹形纹样。">
+            </div>
+            <figcaption class="gallery__cap">
+              <span class="gallery__no" aria-hidden="true">02</span>
+            </figcaption>
+          </figure>
+
+          <figure class="gallery__item">
+            <div class="gallery__frame">
+              <img class="gallery__img" src="assets/img/ATRI-bot-work-03.webp"
+                   width="1440" height="810" loading="lazy" decoding="async"
+                   alt="仿系统故障蓝屏的亚托莉插画：画面左侧是她的脸，右侧是故障提示文字与一个二维码。">
+            </div>
+            <figcaption class="gallery__cap">
+              <span class="gallery__no" aria-hidden="true">03</span>
+            </figcaption>
+          </figure>
+
+        </div>
+
+        <div class="gallery__bar">
+          <button class="gallery__btn" id="galleryPrev" type="button"
+                  aria-label="上一张" aria-controls="galleryTrack">
+            <svg class="gallery__ico gallery__ico--flip" viewBox="0 0 14 14" aria-hidden="true">
+              <path d="M2 7h10M8 3l4 4-4 4"/>
+            </svg>
+          </button>
+          <p class="gallery__count" aria-live="polite"><b id="galleryNow">01</b> / 03</p>
+          <button class="gallery__btn" id="galleryNext" type="button"
+                  aria-label="下一张" aria-controls="galleryTrack">
+            <svg class="gallery__ico" viewBox="0 0 14 14" aria-hidden="true">
+              <path d="M2 7h10M8 3l4 4-4 4"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="works-reward" id="reward" hidden aria-labelledby="rewardTitle">
+    <div class="wrap">
+      <h2 class="works-h2" id="rewardTitle">小游戏配乐</h2>
+
+      <div class="reward">
+        <button class="reward__play" id="rewardPlay" type="button">
+          <svg class="reward__ico reward__ico--play" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M5.6 3.1v9.8L13.2 8z"/>
+          </svg>
+          <svg class="reward__ico reward__ico--pause" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M5.1 3.1h2v9.8h-2zM8.9 3.1h2v9.8h-2z"/>
+          </svg>
+          <span class="reward__label">播放</span>
+        </button>
+
+        <div class="reward__meta">
+          <p class="reward__title">宝箱の毎日</p>
+          <p class="reward__sub">4：01</p>
+        </div>
+
+        <a class="btn btn--sm"
+           href="assets/audios/%E5%AE%9D%E7%AE%B1%E3%81%AE%E6%AF%8E%E6%97%A5.mp3"
+           download="宝箱の毎日.mp3">
+          <span>下载</span>
+          <svg class="btn__ico" viewBox="0 0 14 14" aria-hidden="true">
+            <path d="M7 2v8M3.5 6.5L7 10l3.5-3.5M2.5 12h9"/>
+          </svg>
+        </a>
+      </div>
+
+      <audio id="rewardAudio" preload="none"
+             src="assets/audios/%E5%AE%9D%E7%AE%B1%E3%81%AE%E6%AF%8E%E6%97%A5.mp3"></audio>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="site-footer__brand">
+      <img src="assets/img/ATRI-bot-icon.png" alt="">
+      <span>ATRI-bot</span>
+    </div>
+    <p class="site-footer__kana" lang="ja">時よ止まれ、おまえは美しい</p>
+    <div class="site-footer__bottom">
+      <span>MIT LICENSE · © 2026 ATRI-BOT</span>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/js/nav.js"></script>
+<script src="assets/js/gallery.js"></script>
+<script src="assets/js/reward.js"></script>
+</body>
+</html>

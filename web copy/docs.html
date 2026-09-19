@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-polarity="night" data-veil="night">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>概览 · ATRI-bot</title>
+<meta name="description" content="ATRI-bot 是什么，以及它能做什么。">
+<meta name="color-scheme" content="dark light">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/img/ATRI-bot-icon-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/img/ATRI-bot-icon-180.png">
+<link rel="stylesheet" href="assets/css/tokens.css">
+<link rel="stylesheet" href="assets/css/base.css">
+<link rel="stylesheet" href="assets/css/layout.css">
+<link rel="stylesheet" href="assets/css/components.css">
+<!-- 加载幕布（§6.15）在无脚本时必须关掉 —— 它靠 JS 退场，
+     否则整页会被永远盖住。 -->
+<noscript><style>.curtain{display:none!important}</style></noscript>
+<script src="assets/js/theme.js"></script>
+<script src="assets/js/transition.js"></script>
+</head>
+<body>
+
+<!-- ══════════ 加载幕布（§6.15）══════════
+     只在「本会话第一次进站」与「刷新」时出现，站内跳转交给 §8.6 的跨页转场。
+     幕布本体＝海景照片未到位时的样子（兜底渐变 + 地平线辉光），
+     下沿挂一条波浪边，抬起时扫过整屏。
+     姿态与文案都由 layout.css / curtain.js 接管，这里只搭骨架。 -->
+<div class="curtain" id="curtain" role="status" aria-live="polite">
+ <div class="curtain__lift">
+  <div class="curtain__body">
+    <div class="curtain__glow" aria-hidden="true"></div>
+    <div class="curtain__mid">
+      <p class="curtain__k" aria-hidden="true"><span>L</span><span>O</span><span>A</span><span>D</span><span>I</span><span>N</span><span>G</span></p>
+      <div class="curtain__rule horizon--dot" aria-hidden="true"><i></i></div>
+      <p class="curtain__say">稍等一下哦…我正在努力。</p>
+    </div>
+  </div>
+  <div class="curtain__wave" aria-hidden="true"></div>
+ </div>
+</div>
+
+<a class="skip-link" href="#main">跳到主内容</a>
+
+<div class="sea" aria-hidden="true"></div>
+<div class="stars" aria-hidden="true"></div>
+<div class="veil" aria-hidden="true"></div>
+
+<header class="site-nav" id="siteNav">
+ <div class="site-nav__inner">
+  <a class="brand" href="index.html" aria-label="ATRI-bot 首页">
+    <span class="brand__mark"><img src="assets/img/ATRI-bot-icon.png" alt=""></span>
+    <span class="brand__name">ATRI-bot</span>
+  </a>
+  <a class="nav__icon" href="https://github.com/114514ggb/ATRI-bot"
+     target="_blank" rel="noopener" aria-label="GitHub 仓库">
+    <svg class="ico ico--fill" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+  </a>
+  <span class="nav__sep" aria-hidden="true"></span>
+  <button class="nav__icon" id="themeToggle" type="button" aria-label="切换为白天主题">
+    <svg class="ico ico--sun" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="4.1"/>
+      <path d="M12 2.6v2.4M12 19v2.4M2.6 12h2.4M19 12h2.4M5.4 5.4l1.7 1.7M16.9 16.9l1.7 1.7M18.6 5.4l-1.7 1.7M7.1 16.9l-1.7 1.7"/>
+    </svg>
+    <svg class="ico ico--moon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M20.6 14.4A8.6 8.6 0 019.6 3.4a8.6 8.6 0 1011 11z"/>
+    </svg>
+  </button>
+  <nav class="nav" aria-label="主导航">
+    <ul class="nav__list">
+      <li><a class="nav__link" href="index.html"><span class="nav__label">首页<span class="nav__mirror" aria-hidden="true">首页</span></span></a></li>
+      <li><a class="nav__link is-active" href="docs.html"><span class="nav__label">文档<span class="nav__mirror" aria-hidden="true">文档</span></span></a></li>
+      <li><a class="nav__link" href="works.html"><span class="nav__label">作品集<span class="nav__mirror" aria-hidden="true">作品集</span></span></a></li>
+      <li><a class="nav__link" href="support.html"><span class="nav__label">支持<span class="nav__mirror" aria-hidden="true">支持</span></span></a></li>
+      <li><a class="nav__link" href="contact.html"><span class="nav__label">联系<span class="nav__mirror" aria-hidden="true">联系</span></span></a></li>
+    </ul>
+  </nav>
+ </div>
+</header>
+
+<!-- ══════════ 文档 ══════════
+     `<main>` 带 `.docs` 是为了挂进 §8.6 的转场选择器：
+     那条 :is(...) 列表是按页写死的，新页没把自己加进去，
+     页间平移就会静默失效（内容原地不动，只有背景在换）。 -->
+<main id="main" class="docs">
+  <!-- 这层**不挂 .wrap**：.wrap 的 max-width 会把整块拉回居中，
+       侧边栏就跟着退到屏幕中间去了。宽度与边距由 .docs__layout 自己管（--gutter）。 -->
+  <div class="docs__layout">
+
+        <nav class="docs-nav" aria-label="文档导航">
+        <p class="docs-nav__k">文档</p>
+        <ul class="docs-nav__pages">
+        <li><a class="docs-nav__page is-current" aria-current="page" href="docs.html">概览</a></li>
+        <li><a class="docs-nav__page" href="docs-start.html">快速开始</a></li>
+        <li><a class="docs-nav__page" href="docs-structure.html">项目结构</a></li>
+        <li><a class="docs-nav__page" href="docs-arch.html">架构设计</a></li>
+        </ul>
+        <p class="docs-nav__k docs-nav__k--sub">本页</p>
+        <ul class="docs-nav__secs">
+        <li><a class="docs-nav__sec" href="#intro">前言</a></li>
+        <li><a class="docs-nav__sec" href="#features">项目核心功能</a></li>
+        <li><a class="docs-nav__sec docs-nav__sec--h3" href="#llm">深度 LLM 聊天集成</a></li>
+        <li><a class="docs-nav__sec docs-nav__sec--h3" href="#commands">类 Unix 命令系统</a></li>
+        <li><a class="docs-nav__sec docs-nav__sec--h3" href="#web-panel">Web 管理面板</a></li>
+        <li><a class="docs-nav__sec docs-nav__sec--h3" href="#other">其他实用功能</a></li>
+        <li><a class="docs-nav__sec" href="#contribute">参与贡献</a></li>
+        <li><a class="docs-nav__sec" href="#license">开源协议</a></li>
+        </ul>
+        </nav>
+
+    <article class="docs__article">
+      <p class="docs__k" data-reveal>DOCS / 文档</p>
+      <h1 class="docs__title" data-reveal data-delay="1">概览</h1>
+      <p class="docs__lede" data-reveal data-delay="2">ATRI-bot 是什么，以及它能做什么。</p>
+      <div class="doc-body">
+        <h2 id="intro">前言</h2>
+        <p>来自萌新到处学习（集百家之长）做出来的<strong>私用</strong>神秘项目。主要是按照自己的需求编写一个专而狭窄的学习性质项目，专注于提供一个深度定制化的群聊机器人体验，发出来是用来交流学习的。</p>
+        <p>你可以在里面了解到以下这些技术实践：</p>
+        <ul><li><strong>完整的 LLM 聊天全链路</strong>：从提示词构建、Function Calling、MCP 工具调用，到结构化 JSON 决策解析</li><li><strong>两级记忆系统</strong>：短期滑动上下文 + LLM 压缩摘要，以及基于 pgvector 的长期向量记忆</li><li><strong>混合检索（Hybrid RAG）</strong>：向量检索 + 全文检索（pgroonga）双路召回，RRF 融合 + 时间衰减评分</li><li><strong>依赖注入架构</strong>：基于单例 <code>DIContainer</code> 的服务解耦与管理，全异步设计</li></ul>
+        <p>项目结构清晰，核心链路注释详细，适合想了解「如何从零搭建一个 LLM Bot」的同学参考。</p>
+        <h2 id="features">项目核心功能</h2>
+        <p>一个基于 <strong>NapCat</strong> 对接的 QQ Bot，以群聊场景为核心深度定制。</p>
+        <h3 id="llm">深度 LLM 聊天集成</h3>
+        <p>完全自主实现的 LLM 聊天全链路，从输入处理到输出决策全部可控：</p>
+        <ul><li><strong>全异步高并发</strong>：回复流程完全异步，支持多供应商 Key 池轮询，多群并发场景下也能稳定运行。</li><li><strong>结构化决策输出</strong>：模型以 JSON 格式返回结构化决策（<code>speak</code> 回复 / <code>update</code> 更新画像 / <code>silence</code> 静默），工具调用通过 Function Calling 循环执行，行为完全可控且易于扩展。</li><li><strong>工具扩展能力</strong>：支持 Function Calling、<strong>MCP（Model Context Protocol）</strong>协议工具集，以及 <strong>Skills</strong> 自定义提示词；内置 18 个工具，并提供 <code>tool_search</code> 让模型按需发现和加载工具。</li><li><strong>两级记忆系统</strong>：短期滑动上下文，加长期向量记忆。</li><li><strong>用户画像</strong>：为每位用户维护称呼、关系、性格、偏好等画像文档，嵌入每次对话上下文，保证跨会话态度一致。</li><li><strong>高可用降级</strong>：主模型 API 出现异常时，自动按配置顺序切换到备用供应商和模型，保证有问必达。</li><li><strong>公式图片化输出</strong>：回复中的 LaTeX 公式（<code>$...$</code>、<code>$$...$$</code>、<code>\(...\)</code>、<code>\[...\]</code>）会自动渲染成图片发送，在群里讨论数学公式不再是一串源码。</li><li><strong>拟人化交互</strong>：自然发送表情包，支持分段回复模拟真实打字节奏；达到条件时主动融入群聊话题，而不只是被动等待 @。</li></ul>
+        <p>其中两级记忆系统分这样两层：</p>
+        <ul><li><strong>短期</strong>：每个群 / 用户维护独立的滑动上下文窗口，超限时由 LLM 自动压缩摘要、无损续接。</li><li><strong>长期</strong>：对话结束后提取关键事件，经 Embedding 向量化后存入 PostgreSQL（pgvector），检索时采用<strong>向量 + 全文双路召回 + RRF 融合 + 时间衰减</strong>评分。</li></ul>
+        <aside class="doc-note"><p>长期记忆聚焦于对话中的事件与偏好，不适用于存储长文档；对聊天场景而言已经足够实用。</p></aside>
+        <h3 id="commands">类 Unix 命令系统</h3>
+        <p>在群里 @bot 后以 <code>/</code> 开头即可触发（例如 <code>@atri-bot /help --list</code>，需使用 QQ 的 @ 而非直接输入名字）：</p>
+        <ul><li><strong>参数解析</strong>：支持 <code>-</code> / <code>--</code> 参数风格，内置参数类型校验。</li><li><strong>权限管理</strong>：内置多级权限系统，支持拉黑或授予管理员权限，可在任意处理环节拒绝非法调用。</li><li><strong>自动帮助文档</strong>：通过装饰器声明参数描述后，<code>--help</code> 文档自动生成，无需手写。</li></ul>
+        <h3 id="web-panel">Web 管理面板</h3>
+        <p>Bot 启动时会在独立端口拉起一个 Web 管理面板（<code>web_panel.enable</code> 默认开启，端口与登录口令见 <code>config.web_panel</code>，默认 <code>5125</code>），面板异常不会影响 Bot 主服务运行：</p>
+        <ul><li><strong>可视化管理</strong>：配置文件在线编辑（模型供应商、MCP 工具等）、数据库状态查看、记忆检索与浏览、人设切换、日志查看等页面，并已适配手机端浏览器。</li><li><strong>Web 在线聊天</strong>：内置聊天页，可以直接在浏览器里与 Bot 对话，支持多会话管理、Agent 流式输出、附件上传。</li><li><strong>安全防护</strong>：<code>access_token</code> 登录校验，连续认证失败会触发限制，防止密码被暴力破解。</li></ul>
+        <h3 id="other">其他实用功能</h3>
+        <ul><li><strong>插件系统</strong>：<code>atribot/plugins/</code> 下的插件启动时自动加载，支持消息 / 通知 / 请求事件订阅与管道中间件，可热重载。</li><li><strong>子 Agent 协作</strong>：<code>sub_agent</code> 工具可将复杂多步任务委派给独立子代理（自带工具集 + LLM 循环）执行。</li><li><strong>定时自触发</strong>：<code>schedule_self_trigger</code> 工具可让 Bot 在指定时间主动发起一次群聊思考。</li><li><strong>高性能关键词匹配</strong>：关键词响应底层采用 <strong>AC 自动机</strong>，即使配置上万条规则也能保持毫秒级响应。</li><li><strong>群成员变动提醒</strong>：成员加入或退出时自动通知。</li><li><strong>戳一戳互动</strong>：被戳时不只会响应，还会「戳回去」。</li><li><strong>稳健架构基础</strong>：数据库连接池 + 消息队列，从容应对并发压力。</li></ul>
+        <h2 id="contribute">参与贡献</h2>
+        <p>欢迎提交 Issue、PR，或者直接提出改进建议。无论是修 Bug、补文档、优化架构，还是扩展新能力，都非常欢迎。</p>
+        <p class="doc-link"><a href="https://github.com/114514ggb/ATRI-bot/issues" target="_blank" rel="noopener">前往仓库提 Issue</a></p>
+        <h2 id="license">开源协议</h2>
+        <p>本项目遵循 <strong>MIT License</strong> 协议。详情请参阅仓库根目录的 LICENSE 文件。</p>
+        <p class="doc-link"><a href="https://github.com/114514ggb/ATRI-bot/blob/main/LICENSE" target="_blank" rel="noopener">查看 LICENSE</a></p>
+      </div>
+    </article>
+
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="site-footer__brand">
+      <img src="assets/img/ATRI-bot-icon.png" alt="">
+      <span>ATRI-bot</span>
+    </div>
+    <p class="site-footer__kana" lang="ja">時よ止まれ、おまえは美しい</p>
+    <div class="site-footer__bottom">
+      <span>MIT LICENSE · © 2026 ATRI-BOT</span>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/js/curtain.js"></script>
+<script src="assets/js/nav.js"></script>
+</body>
+</html>

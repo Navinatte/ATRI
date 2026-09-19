@@ -271,16 +271,18 @@ class build_prompt:
         "</tag_guidance>"
         ) 
 
-    def decision_whether_responses(self, group_id:int, prompt:str, else_prompt:str)->str:
-        """群聊用的主动思考决策的json提示词,的第二版
+    def group_static_context(self, group_id: int, else_prompt: str = "") -> str:
+        """群聊决策提示词的静态部分(同一群跨轮不变,适合前置进 system 以提升前缀缓存命中)
+
+        与 trigger_prompt 拆分前内容一致,仅把每轮变化的 <prompt> 段移出,
+        其余文字(environment/else_prompt/access_memory/output_requirement)原样保留
 
         Args:
             group_id (int): 群号
-            prompt (str): 当前触发情况的提示
-            else_prompt (str): 其他在中间补充提示词
+            else_prompt (str): 其他静态补充提示(如表情包提示)
 
         Returns:
-            str: prompt返回
+            str: 静态提示词
         """
         return (
             "<context>"
@@ -288,7 +290,6 @@ class build_prompt:
             f"你在一个qq群聊中,群号是{group_id},你的QQ号是:{self.config.account.id},你的账号名是:{self.config.account.name}请注意哪些是你自己的发言,一些特殊消息被格式化成[cq]文本了"
             "群内的消息已经被格式化成文本,用户唯一标识:\"qq_id\"用户自己定义账号名称:\"nick_name\"当前user在当前群的qq的权限情况:\"group_role\"格式化后的用户输入:\"user_message\",注意区分你自己的和别人的消息"
             f"</environment>{else_prompt}"
-            f"<prompt>{prompt}</prompt>"
             "<access_memory>有人问你记得什么事情或是问你某个人或事情的时候一定要使用查询记忆工具或网络搜索了解后再回答，比如有人问你记得matter吗？或是和某个人或事情相关问题就要想办法查询出matter相关结果,再结合回答</access_memory>"
             "<output_requirement>"
             """
@@ -358,16 +359,18 @@ JSON里要求是包含"actions"键及其对应的JSON列表,JSON列表actions对
             "</context>"  
         )
 
-    def decision_whether_private_responses(self, user_id: int, prompt: str, else_prompt: str) -> str:
-        """私聊用的主动思考决策的json提示词
+    def private_static_context(self, user_id: int, else_prompt: str = "") -> str:
+        """私聊决策提示词的静态部分(同一用户跨轮不变,适合前置进 system)
+
+        与 trigger_prompt 拆分前内容一致,仅把每轮变化的 <prompt> 段移出,
+        其余文字(environment/else_prompt/access_memory/output_requirement)原样保留
 
         Args:
             user_id (int): 私聊对象的QQ号
-            prompt (str): 当前触发情况的提示
-            else_prompt (str): 其他在中间补充提示词
+            else_prompt (str): 其他静态补充提示(如表情包提示)
 
         Returns:
-            str: prompt返回
+            str: 静态提示词
         """
         return (
             "<context>"
@@ -376,7 +379,6 @@ JSON里要求是包含"actions"键及其对应的JSON列表,JSON列表actions对
             "你输出的内容将直接作为私聊消息发送给对方。"
             "用户的消息已被格式化,用户唯一标识:\"user_id\"用户自己定义账号名称:\"nick_name\"格式化后的用户输入:\"user_message\""
             f"</environment>{else_prompt}"
-            f"<prompt>{prompt}</prompt>"
             "<access_memory>有人问你记得什么事情或是问你某个人或事情的时候一定要使用查询记忆工具或网络搜索了解后再回答</access_memory>"
             "<output_requirement>"
             """
@@ -441,3 +443,17 @@ json里要求是包含"actions"键及其对应的决策列表,里面可以有多
             "</output_requirement>"
             "</context>"
         )
+
+    @staticmethod
+    def trigger_prompt(prompt: str) -> str:
+        """决策提示词的动态部分(每轮随触发场景变化,保留在增量消息末尾)
+
+        静态部分见 group_static_context / private_static_context
+
+        Args:
+            prompt (str): 当前触发情况的提示
+
+        Returns:
+            str: 动态提示词
+        """
+        return f"<prompt>{prompt}</prompt>"

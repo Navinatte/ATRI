@@ -1,0 +1,231 @@
+/* ============================================================
+   ATRI-bot · Reset / 排版 / 背景层
+   ============================================================ */
+
+/* ── 字体 ──────────────────────────────────────────────
+   默认只留 local()，零请求。
+   把 woff2 放进 web/assets/fonts/ 后，取消下面注释即启用自托管。
+   （不要提前写 url() —— 文件不存在会让 file:// 下的 load 事件超时） */
+@font-face{
+  font-family:"JiangCheng Yuan";
+  src:local("江城圆体"),local("江城圆体 400W"),local("JiangChengYuanTi");
+  /* src:url("../fonts/jiangcheng-400.woff2") format("woff2"); */
+  font-weight:400;font-style:normal;font-display:swap;
+}
+@font-face{
+  font-family:"JiangCheng Yuan";
+  src:local("江城圆体 700W"),local("江城圆体 Bold"),local("JiangChengYuanTi-Bold");
+  /* src:url("../fonts/jiangcheng-700.woff2") format("woff2"); */
+  font-weight:700;font-style:normal;font-display:swap;
+}
+
+/* ── Reset ───────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+html,body{margin:0;padding:0}
+body{
+  min-height:100vh;
+  font-family:var(--font-sans);
+  font-size:var(--fs-body);
+  font-weight:400;              /* 基准字重是 400，不是 300 */
+  line-height:1.90;             /* 江城圆体行高偏紧，正文放宽以补偿 */
+  color:var(--fg);
+  background:var(--bg-base);
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+  overflow-x:hidden;
+  transition:color var(--dur-2) var(--ease-sea),
+             background var(--dur-2) var(--ease-sea);
+}
+h1,h2,h3,h4,p,figure,blockquote,dl,dd{margin:0}
+ul,ol{margin:0;padding:0;list-style:none}
+img,svg,video{display:block;max-width:100%}
+img{height:auto;border-style:none}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+a{color:inherit;text-decoration:none}
+hr{border:0}
+
+/* ── 排版 ────────────────────────────────────────────── */
+h1,h2,h3,h4{font-family:var(--font-display);font-weight:700;line-height:1.30}
+strong,b{font-weight:700}
+code,kbd,samp{font-family:var(--font-mono);font-size:.92em}
+[lang="ja"]{font-family:var(--font-jp)}
+
+/* 正文窄栏：江城圆体作者声明「不建议用于文章正文」（行高 + 标点宽度），
+   靠 34em 栏宽 + 1.90 行高规避 */
+.prose{max-width:34em;color:var(--fg-muted)}
+.prose a{color:var(--accent);border-bottom:1px solid var(--line-color-accent)}
+.prose a:hover{border-bottom-color:currentColor}
+
+/* ── 选择 / 焦点 ─────────────────────────────────────── */
+::selection{background:var(--accent-deep);color:var(--foam)}
+:focus-visible{outline:1px dashed var(--accent);outline-offset:6px}
+
+/* 跳转到主内容（键盘可达性）*/
+.skip-link{
+  position:absolute;left:var(--space-4);top:-100px;z-index:1000;
+  padding:10px 16px;background:var(--bg-panel-alt);color:var(--fg);
+  border:1px solid var(--line-color-strong);
+  transition:top var(--dur-2) var(--ease-sea);
+}
+.skip-link:focus{top:var(--space-4)}
+
+/* ============================================================
+   背景层
+   层级：.sea (-3) → .stars (-2) → .veil (-1) → 内容
+   ============================================================ */
+.sea{
+  position:fixed;inset:0;z-index:-3;pointer-events:none;
+  background:var(--sea-bg);
+  transition:background var(--dur-2) var(--ease-sea);
+}
+/* 海景照片（§3.10）—— 三层，自上而下：① 遮罩 ② 照片 ③ 兜底渐变。
+   ① 把照片的亮度压回 --bg-base 附近（厚度见 --sea-photo-scrim）；
+   ③ 是保险：照片没加载出来时外观照旧，不会塌成一片白。
+   切昼夜时照片是硬切（图像层不参与插值），但手动切换有 .veil 盖布，
+   硬切发生在盖布底下，看不见。 */
+html[data-polarity] .sea{
+  background:
+    linear-gradient(var(--sea-photo-scrim),var(--sea-photo-scrim)),
+    var(--sea-photo) center/cover no-repeat,
+    var(--sea-bg);
+}
+/* 上下暗角：把固定底色压回中间调，滚动时文字才有稳定的底 */
+.sea::before{
+  content:"";position:absolute;inset:0;
+  background:linear-gradient(180deg,
+    var(--vig-a) 0%,transparent 34%,transparent 62%,var(--vig-b) 100%);
+}
+/* 地平线辉光（光层；极性翻转时它不参与）*/
+.sea::after{
+  content:"";position:absolute;inset:0;
+  background:var(--sea-glow);opacity:var(--sea-glow-a);
+  transition:background var(--dur-2) var(--ease-sea),
+             opacity var(--dur-2) var(--ease-sea);
+}
+.stars{
+  position:fixed;inset:0;z-index:-2;pointer-events:none;
+  opacity:var(--stars-a);
+  transition:opacity var(--dur-3) var(--ease-sea);
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='280' height='280'%3E%3Cg fill='%23fcfaf3'%3E%3Ccircle cx='22' cy='34' r='1'/%3E%3Ccircle cx='146' cy='86' r='.8'/%3E%3Ccircle cx='214' cy='26' r='1.2'/%3E%3Ccircle cx='72' cy='182' r='.9'/%3E%3Ccircle cx='186' cy='214' r='.7'/%3E%3Ccircle cx='248' cy='152' r='1'/%3E%3Ccircle cx='112' cy='248' r='.8'/%3E%3Ccircle cx='40' cy='122' r='.6'/%3E%3C/g%3E%3C/svg%3E");
+  -webkit-mask-image:linear-gradient(180deg,#000 0%,transparent 46%);
+          mask-image:linear-gradient(180deg,#000 0%,transparent 46%);
+}
+/* 过渡盖布（§3.9.2）：手动切换昼夜时用它把整页盖住，
+   于是切换过程「全程没有一帧文字压在中间调上」。
+   常态 opacity 为 0，等于不存在。 */
+.veil{
+  position:fixed;inset:0;z-index:-1;pointer-events:none;
+  opacity:var(--veil-a);
+  background:var(--veil-night);
+  transition:opacity 320ms linear;          /* 雾散 */
+}
+html[data-veil="day"] .veil{background:var(--veil-day)}
+html.is-veiling .veil{
+  opacity:1;
+  transition-duration:180ms;                /* 起雾 */
+}
+
+/* ── 滚动入场 ────────────────────────────────────────── */
+[data-reveal]{
+  opacity:0;transform:translateY(18px);
+  transition:opacity var(--dur-3) var(--ease-sea),
+             transform var(--dur-3) var(--ease-sea);
+}
+[data-reveal].in{opacity:1;transform:none}
+[data-reveal][data-delay="1"]{transition-delay:60ms}
+[data-reveal][data-delay="2"]{transition-delay:120ms}
+
+/* ============================================================
+   跨页平移转场（§8.6）
+   用 View Transitions 的**跨文档**模式，做出真正的「推」：
+   旧页快照往左滑出的**同时**新页从右滑入 —— 两者并行，
+   所以是一次连续运动，而不是「先滑走、再滑进来」两段拼接。
+   （老实现是两段：离场 240ms → 导航 → 入场 420ms，中间必然有一个
+     断点，观感就是「顿一下」。这正是它显得不连贯的原因。）
+
+   方向靠 CSS 变量传给伪元素：html 上的自定义属性会沿伪元素树继承下去，
+   所以不需要写 `html[data-vt] ::view-transition-old(root)` 这类带祖先的
+   选择器 —— 那要赌 `::view-transition-old` 到底算不算 html 的后代，
+   不同实现对这个的解析口径不一致。用变量就完全绕开了这个问题。
+
+   仅 Chromium 126+ / Safari 18.2+ 真正生效。不支持的浏览器里
+   `::view-transition-*` 根本不存在，这些规则就是一段死样式，
+   由 transition.js 的回退路径照常播放两段式推入。
+   ============================================================ */
+@view-transition{navigation:auto}
+
+@keyframes vtSlideOutLeft { to{transform:translateX(-100%)} }
+@keyframes vtSlideOutRight{ to{transform:translateX(100%)} }
+@keyframes vtSlideInRight  { from{transform:translateX(100%)} }
+@keyframes vtSlideInLeft   { from{transform:translateX(-100%)} }
+/* 文档页之间用交叉淡化，不做整页平移 ——
+   换的是同一篇文档里的一个小节，位移会显得"去了别的栏目"。 */
+@keyframes vtFadeOut{ to{opacity:0} }
+@keyframes vtFadeIn { from{opacity:0} }
+
+html[data-vt="forward"]{ --vt-out:vtSlideOutLeft;  --vt-in:vtSlideInRight }
+html[data-vt="back"]   { --vt-out:vtSlideOutRight; --vt-in:vtSlideInLeft  }
+/* 文档页之间：整页**不动**，只有正文交叉淡化。
+   换的是同一篇文档里的一个小节，整页淡入淡出会「闪一下」——
+   那正是要避免的翻页感。
+     · root 拿不到 --vt-out ⇒ animation:none ⇒ 导航 / 侧边栏 / 背景都不动
+       （它们两页本来就一样，瞬间切换看不出来）
+     · 正文靠 .docs__article 上的 view-transition-name 单独成一组，自己做淡化 */
+html[data-vt="fade"]   { --nav-dur:var(--dur-nav-fade) }
+
+/* 命名元素的分组时长也要跟上，否则默认 250ms 会把 300ms 的淡动画剪短 */
+::view-transition-group(doc-article){ animation-duration:var(--nav-dur,var(--dur-nav-vt)) }
+html[data-vt="fade"]::view-transition-old(doc-article){
+  animation:vtFadeOut var(--dur-nav-fade) var(--ease-sea) both;
+}
+html[data-vt="fade"]::view-transition-new(doc-article){
+  animation:vtFadeIn var(--dur-nav-fade) var(--ease-sea) both;
+}
+
+/* ::view-transition-image-pair 默认 isolation:isolate（为交叉淡化准备的），
+   两层相邻滑动时接缝会按 plus-lighter 混合、发白，所以要解掉它 */
+::view-transition-image-pair(root){ isolation:auto }
+
+/* group 层由 UA 带一段自己的几何动画，默认 250ms。若两页的视口宽度不同
+   （例如其中一页内容够长、出现了纵向滚动条），它会把快照横向缩放一下 ——
+   时长和 old/new 不一致就会在中途「抖」一下。统一到同一个时长。 */
+::view-transition-group(root){
+  animation-duration:var(--nav-dur,var(--dur-nav-vt));
+  animation-timing-function:var(--ease-sea);
+}
+
+/* 默认的交叉淡化必须清掉 —— 淡化会把「平移」的实感冲掉。
+   变量没定义时 animation-name 落到 none，等于不播
+   （reload 走的就是这条；data-vt="fade" 时 root 也走这条，见上）。 */
+::view-transition-old(root){
+  animation:var(--vt-out,none) var(--nav-dur,var(--dur-nav-vt)) var(--ease-sea) both;
+  mix-blend-mode:normal;
+}
+::view-transition-new(root){
+  animation:var(--vt-in,none) var(--nav-dur,var(--dur-nav-vt)) var(--ease-sea) both;
+  mix-blend-mode:normal;
+}
+
+/* 转场进行中就把回退动画关掉，免得同一段位移播两遍。
+   这条是纯 CSS 的，不依赖任何事件 —— 事件（pageswap/pagereveal）在部分
+   Electron / 内嵌内核里根本不触发，靠它判断会误事。 */
+html:active-view-transition :is(.hero,.works,.docs,.docs__article,.page-state,.site-footer){
+  animation:none !important;
+}
+
+/* ── 动效可访问性（§12）─────────────────────────────── */
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{
+    animation-duration:.01ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:var(--dur-1) !important;
+  }
+  [data-reveal]{opacity:1;transform:none}
+  /* 直接关掉跨文档转场，而不是把它压到 0.01ms ——
+     后者仍会拍快照、建伪元素，只是白跑一趟 */
+  @view-transition{navigation:none}
+  ::view-transition-old(root),
+  ::view-transition-new(root){animation:none !important}
+}

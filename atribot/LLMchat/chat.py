@@ -115,6 +115,25 @@ class ChatBasics(ABC):
             template_toolset.copy() if template_toolset is not None else None
         )
 
+    def _static_system_prompt(self, preset_name: str, static_context: str) -> str:
+        """组装跨轮不变的静态 system 段(挂在人设后,供前缀缓存命中)
+
+        组成(顺序固定): 待发现工具提示 + skills 提示 + 决策提示静态部分
+
+        Args:
+            preset_name: 工具预设名(group_chat/private_chat),决定待发现工具提示
+            static_context: 决策提示词的静态部分(group_static_context/private_static_context)
+
+        Returns:
+            str: 静态 system 文本
+        """
+        parts: list[str] = []
+        if deferred_prompt := self.tool_calls.get_deferred_tools_prompt(preset_name):
+            parts.append(deferred_prompt)
+        parts.append(self.skills.prompt)
+        parts.append(static_context)
+        return "".join(parts)
+
     @abstractmethod
     async def step(self) -> None:
         """主的聊天逻辑处理的全流程"""
@@ -475,7 +494,15 @@ class GroupChat(ChatBasics):
         request: GenerationRequestSimplify = replace(
             self.template_request_simplify,
             increment_messages=[message_builder.build()],
-            messages=original_context.get_messages(),
+            messages=original_context.get_messages(
+                inject_text=self._static_system_prompt(
+                    "group_chat",
+                    self.build_prompt.group_static_context(
+                        group_id=group_id,
+                        else_prompt=self.emoji_core.prompt,#表情包的提示词
+                    ),
+                )
+            ),
             message_data=event,
             tool_json=round_toolset,
         )
@@ -592,10 +619,8 @@ class GroupChat(ChatBasics):
             including_videos=self.video_sense,
             send_client=event.send_client,
         )
-        message_builder.add_text_left(
-            self.skills.prompt #skills的提示词
-        )
-
+        # 待发现工具/决策提示静态部分已前置到 system(见下方 group_static_system 组装)
+        
         prompt = custom_prompt
         if user_id:
             prompt += (
@@ -604,11 +629,7 @@ class GroupChat(ChatBasics):
             )
         
         message_builder.add_text(
-            self.build_prompt.decision_whether_responses(
-                group_id=group_id,
-                prompt=prompt,
-                else_prompt=self.emoji_core.prompt
-            )
+            self.build_prompt.trigger_prompt(prompt)
         )
 
         if user_id:
@@ -618,14 +639,24 @@ class GroupChat(ChatBasics):
                 user_id = user_id
             )
         else:
-            original_context = self.chat_manager.get_group_context(group_id)
+            # 群级上下文:取其 chat_context(Context),并注入群聊静态 system 段
+            group_context = await self.chat_manager.get_group_context(group_id)
+            original_context = group_context.chat_context
+
+        group_static_system = self._static_system_prompt(
+            "group_chat",
+            self.build_prompt.group_static_context(
+                group_id=group_id,
+                else_prompt=self.emoji_core.prompt,
+            ),
+        )
 
         round_toolset = self._prepare_round_toolset()
 
         request: GenerationRequestSimplify = replace(
             self.template_request_simplify,
             increment_messages=[message_builder.build()],
-            messages=original_context.get_messages(),
+            messages=original_context.get_messages(inject_text=group_static_system),
             message_data=event,
             tool_json=round_toolset,
         )
@@ -735,14 +766,8 @@ class GroupChat(ChatBasics):
             send_client=event.send_client,
             exclude_message_id=event.event.message_id,
         )
-        
-        if deferred_prompt := self.tool_calls.get_deferred_tools_prompt("group_chat"):
-            message_builder.add_text_left(deferred_prompt+self.skills.prompt)#待发现工具的提示词
-        else:
-            message_builder.add_text_left(
-                self.skills.prompt#skills的提示词
-            )
-        
+        # 待发现工具/skills/决策提示静态部分已前置到 system(_static_system_prompt),增量消息不再携带
+
         await self.append_message_segments_prompt(
             event,
             message_builder,
@@ -754,11 +779,7 @@ class GroupChat(ChatBasics):
             f"<current_user_info>{await self.user_system.get_user_info(user_id)}</current_user_info>"
         )
         message_builder.add_text(
-            self.build_prompt.decision_whether_responses(
-                group_id=group_id,
-                prompt=prompt,
-                else_prompt=self.emoji_core.prompt#表情包的提示词
-            )
+            self.build_prompt.trigger_prompt(prompt)
         )
 
         return message_builder
@@ -1200,7 +1221,15 @@ class PrivateChat(ChatBasics):
         request: GenerationRequestSimplify = replace(
             self.template_request_simplify,
             increment_messages=[message_builder.build()],
-            messages=original_context.get_messages(),
+            messages=original_context.get_messages(
+                inject_text=self._static_system_prompt(
+                    "private_chat",
+                    self.build_prompt.private_static_context(
+                        user_id=user_id,
+                        else_prompt=self.emoji_core.prompt,
+                    ),
+                )
+            ),
             message_data=event,
             tool_json=round_toolset,
         )
@@ -1301,22 +1330,12 @@ class PrivateChat(ChatBasics):
             including_audios,
             including_videos,
         )
-        if deferred_prompt := self.tool_calls.get_deferred_tools_prompt("private_chat"):
-            message_builder.add_text_left(deferred_prompt+self.skills.prompt)#待发现工具的提示词
-        else:
-            message_builder.add_text_left(
-                self.skills.prompt#skills的提示词
-            )
-        
+        # 待发现工具/skills/决策提示静态部分已前置到 system(_static_system_prompt),增量消息不再携带
         message_builder.add_text(
             f"<current_user_info>{await self.user_system.get_user_info(user_id)}</current_user_info>"
         )
         message_builder.add_text(
-            self.build_prompt.decision_whether_private_responses(
-                user_id=user_id,
-                prompt=prompt,
-                else_prompt=self.emoji_core.prompt,#表情包提示词(skills.prompt已在左侧注入,避免双重)
-            )
+            self.build_prompt.trigger_prompt(prompt)
         )
         return message_builder
 

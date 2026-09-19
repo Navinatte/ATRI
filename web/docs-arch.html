@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-polarity="night" data-veil="night">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>架构设计 · ATRI-bot</title>
+<meta name="description" content="消息怎么流、模型怎么调度、记忆怎么存。">
+<meta name="color-scheme" content="dark light">
+<link rel="icon" type="image/png" sizes="32x32" href="assets/img/ATRI-bot-icon-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="assets/img/ATRI-bot-icon-180.png">
+<link rel="stylesheet" href="assets/css/tokens.css">
+<link rel="stylesheet" href="assets/css/base.css">
+<link rel="stylesheet" href="assets/css/layout.css">
+<link rel="stylesheet" href="assets/css/components.css">
+<script src="assets/js/theme.js"></script>
+<script src="assets/js/transition.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主内容</a>
+
+<div class="sea" aria-hidden="true"></div>
+<div class="stars" aria-hidden="true"></div>
+<div class="veil" aria-hidden="true"></div>
+
+<header class="site-nav" id="siteNav">
+ <div class="site-nav__inner">
+  <a class="brand" href="index.html" aria-label="ATRI-bot 首页">
+    <span class="brand__mark"><img src="assets/img/ATRI-bot-icon.png" alt=""></span>
+    <span class="brand__name">ATRI-bot</span>
+  </a>
+  <a class="nav__icon" href="https://github.com/114514ggb/ATRI-bot"
+     target="_blank" rel="noopener" aria-label="GitHub 仓库">
+    <svg class="ico ico--fill" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+  </a>
+  <span class="nav__sep" aria-hidden="true"></span>
+  <button class="nav__icon" id="themeToggle" type="button" aria-label="切换为白天主题">
+    <svg class="ico ico--sun" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="4.1"/>
+      <path d="M12 2.6v2.4M12 19v2.4M2.6 12h2.4M19 12h2.4M5.4 5.4l1.7 1.7M16.9 16.9l1.7 1.7M18.6 5.4l-1.7 1.7M7.1 16.9l-1.7 1.7"/>
+    </svg>
+    <svg class="ico ico--moon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M20.6 14.4A8.6 8.6 0 019.6 3.4a8.6 8.6 0 1011 11z"/>
+    </svg>
+  </button>
+  <nav class="nav" aria-label="主导航">
+    <ul class="nav__list">
+      <li><a class="nav__link" href="index.html"><span class="nav__label">首页<span class="nav__mirror" aria-hidden="true">首页</span></span></a></li>
+      <li><a class="nav__link is-active" href="docs.html"><span class="nav__label">文档<span class="nav__mirror" aria-hidden="true">文档</span></span></a></li>
+      <li><a class="nav__link" href="works.html"><span class="nav__label">作品集<span class="nav__mirror" aria-hidden="true">作品集</span></span></a></li>
+      <li><a class="nav__link" href="support.html"><span class="nav__label">支持<span class="nav__mirror" aria-hidden="true">支持</span></span></a></li>
+      <li><a class="nav__link" href="contact.html"><span class="nav__label">联系<span class="nav__mirror" aria-hidden="true">联系</span></span></a></li>
+    </ul>
+  </nav>
+ </div>
+</header>
+
+<main id="main" class="docs">
+  <div class="docs__layout">
+
+        <nav class="docs-nav" aria-label="文档导航">
+        <p class="docs-nav__k">文档</p>
+        <ul class="docs-nav__pages">
+        <li><a class="docs-nav__page" href="docs.html">概览</a></li>
+        <li><a class="docs-nav__page" href="docs-start.html">快速开始</a></li>
+        <li><a class="docs-nav__page" href="docs-structure.html">项目结构</a></li>
+        <li><a class="docs-nav__page is-current" aria-current="page" href="docs-arch.html">架构设计</a></li>
+        </ul>
+        <p class="docs-nav__k docs-nav__k--sub">本页</p>
+        <ul class="docs-nav__secs">
+        <li><a class="docs-nav__sec" href="#flow">整体消息流</a></li>
+        <li><a class="docs-nav__sec" href="#llm-flow">LLM 聊天流程设计</a></li>
+        <li><a class="docs-nav__sec" href="#memory">记忆系统设计</a></li>
+        <li><a class="docs-nav__sec docs-nav__sec--h3" href="#short-term">短期上下文（ChatManager）</a></li>
+        <li><a class="docs-nav__sec docs-nav__sec--h3" href="#long-term">长期向量记忆（MemorySystem + pgvector）</a></li>
+        <li><a class="docs-nav__sec docs-nav__sec--h3" href="#user-info">用户画像（UserSystem）</a></li>
+        </ul>
+        </nav>
+
+    <article class="docs__article">
+      <p class="docs__k" data-reveal>DOCS / 文档</p>
+      <h1 class="docs__title" data-reveal data-delay="1">架构设计</h1>
+      <p class="docs__lede" data-reveal data-delay="2">消息怎么流、模型怎么调度、记忆怎么存。</p>
+      <div class="doc-body">
+        <h2 id="flow">整体消息流</h2>
+        <pre class="doc-pre"><code>NapCat (QQ客户端)
+              │  WebSocket / HTTP
+              ▼
+        平台适配器 (OneBotAdapter，支持多平台)
+              │
+              ▼
+        MessageQueue (消息队列)
+              │
+              ▼
+        Pipeline (WhitelistMiddleware 群白名单过滤)
+              │
+              ▼
+        EventBus (按 PostType 分发)
+              │
+              ├──► AtCommandRule 路由    (@bot /cmd 命令 → CommandSystem)
+              ├──► 插件事件处理器        (Plugin.on_message / on_notice 等)
+              └──► initiativeChat 路由   (普通聊天 / 主动对话 → LLM 决策)</code></pre>
+        <p>群聊由 <code>GroupChat</code> 处理，私聊由 <code>PrivateChat</code> 处理；命令与聊天两条路由在 <code>bot_framework._register_at_routes()</code> 注册，插件处理器由 <code>PluginManager</code> 在启动时自动扫描并挂载。</p>
+        <p>除了消息主干，项目还包含以下后台支撑模块：</p>
+        <div class="doc-table"><table><thead><tr><th scope="col">模块</th><th scope="col">说明</th></tr></thead><tbody><tr><td><code>PlatformManager</code></td><td>多平台适配器管理器，持有 MessageQueue + Pipeline + EventBus</td></tr><tr><td><code>PluginManager</code></td><td>插件系统：自动扫描加载 <code>atribot/plugins/</code>，支持热重载</td></tr><tr><td><code>TimeTriggerSupervisor</code></td><td>定时任务调度器，支持延迟任务、固定间隔和 Cron 表达式</td></tr><tr><td><code>MediaProcessor</code></td><td>多模态消息处理器，将图片 / 音频 / 视频统一转为文本供 LLM 理解</td></tr><tr><td><code>agent/</code> 子 Agent 系统</td><td>用于委派复杂多步任务，支持上下文隔离与工具链编排</td></tr><tr><td><code>PermissionsManagement</code></td><td>四级权限校验（黑名单 → 普通用户 → 管理员 → Root）</td></tr><tr><td><code>web_panel/</code> Web 管理面板</td><td>独立端口运行的可视化管理与在线聊天面板，异常不影响 Bot 主服务</td></tr></tbody></table></div>
+        <h2 id="llm-flow">LLM 聊天流程设计</h2>
+        <p>LLM 聊天的核心链路在 <code>atribot/LLMchat/</code> 目录下，整体采用<strong>全异步流水线</strong>设计：</p>
+        <pre class="doc-pre"><code>用户消息 (MessageEventEnvelope)
+              │
+              ▼
+        chat.py → GroupChat.step()          ← 聊天主入口
+              │
+              ├─① prompt_structure()        构建提示词
+              │     ├─ 群聊历史 (近期消息窗口)
+              │     ├─ 用户画像 (UserSystem)
+              │     ├─ 最近记忆片段 (MemorySystem.query_user_recently_memory)
+              │     ├─ 表情包提示词 (EmojiCore)
+              │     └─ Skills 提示词 (SkillsManager)
+              │
+              ├─② LLMCoordinator.run()      调度模型请求
+              │     ├─ 主模型请求 (model_api)
+              │     ├─ Function Calling 循环 (MCP/tools)
+              │     └─ 主模型失败时降级备用模型 (_request_model_with_fallback_)
+              │
+              ├─③ 解析 JSON 响应            模型输出结构化决策
+              │     ├─ "speak"    → 回复消息 (分段发送 / 表情包)
+              │     ├─ "update"   → 更新用户画像
+              │     ├─ "silence"  → 不回复
+              │     └─ 工具调用    → 通过 Function Calling 循环执行 (MCP / 本地工具)
+              │
+              └─④ 事后处理
+                    ├─ 上下文写回 (ChatManager)
+                    └─ 上下文超长时触发 summarize_context() 压缩</code></pre>
+        <p><strong>高可用降级机制</strong>：当主模型 API 响应异常时，<code>_request_model_with_fallback_</code> 会按照 <code>config.model.standby_model</code> 列表依次尝试备用供应商和模型，保证即使主力 Key 失效也能正常回复。</p>
+        <p><strong>结构化输出</strong>：模型被要求返回 JSON 格式的决策列表（<code>return</code> 数组），每一项包含 <code>decision</code> 字段，使回复行为完全可控和可扩展。</p>
+        <h2 id="memory">记忆系统设计</h2>
+        <p>记忆系统分为<strong>短期上下文缓存</strong>和<strong>长期向量记忆</strong>两层。</p>
+        <h3 id="short-term">短期上下文（ChatManager）</h3>
+        <ul><li>每个群 / 用户维护一个滑动的消息窗口 <code>Context</code>，直接嵌入每次请求的 <code>messages</code> 列表。</li><li>当上下文 token 数超限时，触发 <code>MemorySystem.summarize_context()</code> 对旧消息进行 LLM 压缩摘要，压缩后的文本以 <code>assistant</code> 角色消息插入上下文头部。</li></ul>
+        <h3 id="long-term">长期向量记忆（MemorySystem + pgvector）</h3>
+        <pre class="doc-pre"><code>聊天结束后
+              │
+              ▼
+        MemorySystem.extract_stored_group_message()
+              │
+              ├─ LLM 信息提取 (PURE_GROUP_FACT_RETRIEVAL_PROMPT)
+              │     └─ 输出结构化 JSON：per-user 事件 + 群话题
+              │
+              ├─ RAGManager.calculate_embedding()   文本 → 1024维向量
+              │
+              └─ MemoryVectorStore.batch_add_memories()  写入 PostgreSQL atri_memory 表</code></pre>
+        <p>记忆分类（MemoryCategory）与各自的<strong>时间半衰期</strong>：</p>
+        <div class="doc-table"><table><thead><tr><th scope="col">分类</th><th scope="col">含义</th><th scope="col">时间半衰期</th></tr></thead><tbody><tr><td><code>preference</code></td><td>用户偏好</td><td>90 天</td></tr><tr><td><code>fact</code></td><td>事实性记忆（默认）</td><td>90 天</td></tr><tr><td><code>experience</code></td><td>经历记忆</td><td>60 天</td></tr><tr><td><code>emotion</code></td><td>情感记忆</td><td>30 天</td></tr><tr><td><code>group_topic</code></td><td>群聊话题</td><td>7 天</td></tr><tr><td><code>knowledge</code></td><td>通用知识</td><td>约 10 年</td></tr><tr><td><code>domain</code></td><td>领域专业知识</td><td>约 10 年</td></tr><tr><td><code>guideline</code></td><td>行为准则</td><td>约 10 年</td></tr></tbody></table></div>
+        <p><strong>混合召回（hybrid_recall）</strong>：使用一条带 CTE 的 SQL 同时进行<strong>向量检索</strong>（pgvector 余弦距离）和<strong>全文检索</strong>（pgroonga），再通过 RRF（Reciprocal Rank Fusion）融合两路结果，最终叠加重要度、访问频次和时间衰减进行综合排序。</p>
+        <pre class="doc-pre"><code>查询文本
+            │
+            ├─ pgvector 向量路     (余弦距离，取前 40 候选)
+            ├─ pgroonga 全文路     (全文评分，取前 40 候选)
+            │
+            └─ RRF 融合
+                   + importance / 10.0     × 权重
+                   + ln(1 + access_count)  × 权重
+                   + EXP(-λ × age_days)    × 时间衰减 (λ 按 category 差异化)
+                   │
+                   └─► 返回 Top-N 记忆</code></pre>
+        <p><strong>记忆自动更新与演进（Memory Consolidator）</strong>：系统不仅支持写入和提取，还拥有针对零散片段和冲突信息的持续维护能力。</p>
+        <pre class="doc-pre"><code>定期维护 / 新记忆提取
+              │
+              ▼
+        冲突检测与聚类 (Cluster Utils)
+              │
+              ├─ 相似度图构建 (基于 pgvector 检索获取高相似度边)
+              ├─ 连通分量聚类 (同类同用户的相近记忆归结为 Cluster)
+              │
+              └─ 顺序安全处理机制
+                     ├─ LLM 内容合并 (解决冲突/信息动态拓展)
+                     ├─ update_memory (继承最高权重并更新向量)
+                     └─ batch_delete  (删除其余冗余碎片节点)</code></pre>
+        <ul><li><strong>记忆动态更新</strong>：不仅是单纯的追加记录，当新提取的记忆和旧记忆发生冲突或具备连续性时，系统会调用 LLM 对既有记忆进行内容更新和属性拓展，打破原有的只增不改限制。</li><li><strong>后台碎片整理</strong>：内置定时记忆维护任务，利用连通图和簇（Cluster）聚类分析近期高频且相似的记忆，通过顺序安全的非并发机制交由 LLM 执行合并和去重操作，防止重复信息冗余堆叠。</li><li><strong>动态清理</strong>：严格基于记忆类型和其特有的半衰期配置，定期自动触发过期清扫，自动遗忘失去时效性的高能群话题和日常零碎记忆。</li></ul>
+        <h3 id="user-info">用户画像（UserSystem）</h3>
+        <p>为每个用户维护一份 JSON 画像文档（称呼、关系、性格、近期话题、偏好风格等），在每次对话的 prompt 中嵌入，确保 Bot 对同一用户的态度前后一致；画像由 LLM 在对话后自动更新。</p>
+      </div>
+    </article>
+
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="site-footer__brand">
+      <img src="assets/img/ATRI-bot-icon.png" alt="">
+      <span>ATRI-bot</span>
+    </div>
+    <p class="site-footer__kana" lang="ja">時よ止まれ、おまえは美しい</p>
+    <div class="site-footer__bottom">
+      <span>MIT LICENSE · © 2026 ATRI-BOT</span>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/js/nav.js"></script>
+<script src="assets/js/copy.js"></script>
+</body>
+</html>

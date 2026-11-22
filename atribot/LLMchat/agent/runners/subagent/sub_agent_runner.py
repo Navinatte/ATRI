@@ -33,6 +33,11 @@ from atribot.LLMchat.media_processor import MediaProcessor
 from atribot.LLMchat.model_api.ai_connection_manager import LLMConnectionManager
 from atribot.LLMchat.model_api.llm_types import ChatCompletion, ChatCompletionChunk, message
 from atribot.LLMchat.model_api.model_api_basics import model_api_basics
+from atribot.LLMchat.model_api.reasoning_details import (
+    attach_reasoning_details,
+    extract_reasoning_details,
+    merge_reasoning_details,
+)
 
 _MAX_EMPTY_RETRIES = 5  # 空响应重试次数
 _TOOL_OUTPUT_TRUNCATE = 100000  # 工具返回结果截断长度
@@ -256,6 +261,7 @@ class SubAgentRunner(BaseAgentRunner):
         reasoning_content = ""
         content = ""
         tool_calls: List[Dict[str, Any]] = []
+        reasoning_details: List[Dict[str, Any]] = []
         usage: Optional[Dict[str, Any]] = None
         # 用于跟踪已产出 ToolCallStartChunk 的工具(按 index 记录工具名)
         _started_tool_names: Dict[int, str] = {}
@@ -268,6 +274,12 @@ class SubAgentRunner(BaseAgentRunner):
                 continue
 
             delta = choices[0].get("delta", {})
+
+            #思维签名与工具调用同处一个 delta, 需一并收集以支持历史回放
+            merge_reasoning_details(
+                reasoning_details,
+                extract_reasoning_details(delta),
+            )
 
             if dr := delta.get("reasoning_content"):
                 reasoning_content += dr
@@ -332,6 +344,8 @@ class SubAgentRunner(BaseAgentRunner):
             for tc in tool_calls:
                 tc.pop("index", None)
             assistant_message["tool_calls"] = tool_calls
+
+        attach_reasoning_details(assistant_message, reasoning_details)
 
         api_reply: Dict[str, Any] = {
             "choices": [{"index": 0, "message": assistant_message}],
@@ -659,6 +673,7 @@ class SubAgentRunner(BaseAgentRunner):
             tool_calls=assistant_message.get("tool_calls"),
             reasoning_content=assistant_message.get("reasoning_content"),
             extra_content=assistant_message.get("extra_content"),
+            reasoning_details=extract_reasoning_details(assistant_message),
         )
 
         # 扩展持久化上下文

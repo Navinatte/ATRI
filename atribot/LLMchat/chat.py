@@ -12,6 +12,7 @@ from atribot.common_utils import (
     extract_json_from_text,
     refresh_image_download_url,
     url_to_audio_mp3,
+    url_to_image_jpeg,
     url_to_video_mp4,
 )
 from atribot.core.atri_config import atriConfig
@@ -68,6 +69,7 @@ MESSAGE_DELAY = 1.5  # 多条消息间隔时间
 MAX_SINGLE_MESSAGE_LENGTH = 4  # 分条发送长度阈值
 LLM_COOLDOWN_THRESHOLD = 5 #间隔时间,防止多条消息同时发送
 STRING_LENGTH_LIMIT = 500 #字符串长度限制
+IMAGE_INLINE_MAX_KB = 1024 #图片内联 base64 前的压缩上限(KB)
 
 class ChatBasics(ABC):
     """聊天基类"""
@@ -204,6 +206,45 @@ class ChatBasics(ABC):
             log=self.log,
         )
 
+    async def append_image_base64(
+        self,
+        message_builder: MessageBuilder,
+        segment: ImageSegment,
+        send_client: SendClientBase | None,
+    ) -> bool:
+        """下载图片并以 base64 内联进上下文,失败返回 False
+
+        不能把 QQ CDN 链接直接交给模型:该链接形如
+        ``https://multimedia.nt.qq.com.cn/download?appid=..&fileid=..``,
+        一是路径无图片扩展名且带 query,网关的 image_url 校验会直接拒绝
+        (``Invalid image,please use correct url or base64``);
+        二是上游抓不到该链接(``Cannot fetch content from the provided URL``)。
+        因此这里先本地下载并统一转码为 JPEG base64,与音频/视频的处理保持一致。
+
+        Args:
+            message_builder: 目标消息构建器
+            segment: 图片消息段
+            send_client: 发送客户端,用于刷新可能过期的下载链接
+
+        Returns:
+            bool: 成功内联返回 True;链接不可用或下载/转码失败返回 False,由调用方降级
+        """
+        new_url = await self._resolve_image_url(segment, send_client)
+        if not new_url:
+            return False
+
+        converted = await url_to_image_jpeg(
+            new_url,
+            max_size_kb=IMAGE_INLINE_MAX_KB,
+            file_name=segment.file_name,
+        )
+        if converted is None:
+            self.log.warning(f"图片下载或转码失败,降级为文本描述: {new_url}")
+            return False
+
+        message_builder.add_image_base64(converted.data, converted.mime)
+        return True
+
     async def append_message_segments_prompt(
         self,
         event: MessageEventEnvelope,
@@ -231,10 +272,10 @@ class ChatBasics(ABC):
 
         if including_pictures:
             async def dispose_img(message: ImageSegment):
-                new_url = await self._resolve_image_url(message, event.send_client)
-                if new_url:
-                    message_builder.add_image(new_url)
-                elif message.text_description or message.summary:
+                """图片转 base64 内联(网关不接受 QQ CDN 直链),失败降级为文本描述"""
+                if await self.append_image_base64(message_builder, message, event.send_client):
+                    return
+                if message.text_description or message.summary:
                     desc = message.text_description or message.summary
                     message_builder.add_text(f"[CQ:image,summary:{desc}]")
                 else:
@@ -816,11 +857,10 @@ class GroupChat(ChatBasics):
         
         if including_pictures:
             async def dispose_img(message:ImageSegment):
-                """刷新图片下载链接后直传 URL 给模型"""
-                new_url = await self._resolve_image_url(message, event.send_client)
-                if new_url:
-                    message_builder.add_image(new_url)
-                elif message.text_description or message.summary:
+                """图片转 base64 内联(网关不接受 QQ CDN 直链),失败降级为文本描述"""
+                if await self.append_image_base64(message_builder, message, event.send_client):
+                    return
+                if message.text_description or message.summary:
                     desc = message.text_description or message.summary
                     message_builder.add_text(f"[CQ:image,summary:{desc}]")
                 else:

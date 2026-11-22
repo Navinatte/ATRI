@@ -1,5 +1,11 @@
 from typing import AsyncGenerator, Callable, Dict
 
+from atribot.LLMchat.model_api.reasoning_details import (
+    attach_reasoning_details,
+    extract_reasoning_details,
+    merge_reasoning_details,
+)
+
 
 class StreamProcessor:
     """流式响应处理器基类"""
@@ -22,6 +28,7 @@ class StreamProcessor:
             "tool_calls": [],
             "usage": None,
             "extra_content" : None,
+            "reasoning_details": [],
         }
 
     @staticmethod
@@ -125,9 +132,16 @@ class StreamProcessor:
             
             for choice in chunk.get("choices", []):
 
+                delta = choice.get("delta", {})
+                # 思维签名与工具调用同处一个 delta, 必须在处理器链之外先收集
+                merge_reasoning_details(
+                    state["reasoning_details"],
+                    extract_reasoning_details(delta),
+                )
+
                 while current_handler is not None:
                     
-                    if current_handler(choice.get("delta", {}), state):#返回的是是否要切换
+                    if current_handler(delta, state):#返回的是是否要切换
                         current_handler = next(handler_iter, None)
                     else:
                         break
@@ -144,7 +158,9 @@ class StreamProcessor:
 
         if state["tool_calls"]:
             message["tool_calls"] = state["tool_calls"]
-        
+
+        attach_reasoning_details(message, state["reasoning_details"])
+
         #谷歌兼容
         if extra_content := chunk["choices"][0]["delta"].get("extra_content"):
             message["extra_content"] = extra_content
@@ -179,6 +195,7 @@ class StreamProcessor:
         reasoning_content = ""
         content = ""
         tool_calls = []
+        reasoning_details: list = []
         
         async for chunk in async_generator:
             choices = chunk.get("choices")
@@ -187,6 +204,12 @@ class StreamProcessor:
                 continue
                 
             delta = choices[0].get("delta", {})
+
+            #思维签名与工具调用同处一个 delta, 需在流式解析时一并收集
+            merge_reasoning_details(
+                reasoning_details,
+                extract_reasoning_details(delta),
+            )
             
             if delta.get("reasoning_content"):
                 reasoning_content += delta["reasoning_content"]
@@ -233,6 +256,8 @@ class StreamProcessor:
             message["content"] = content
         if tool_calls:
             message["tool_calls"] = tool_calls
+
+        attach_reasoning_details(message, reasoning_details)
         
         
         if chunk and chunk.get("choices"):

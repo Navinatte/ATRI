@@ -18,6 +18,7 @@ from atribot.LLMchat.MCP.tool_model import ToolSet
 from atribot.LLMchat.media_processor import MediaProcessor
 from atribot.LLMchat.model_api.ai_connection_manager import LLMConnectionManager
 from atribot.LLMchat.model_api.model_api_basics import model_api_basics
+from atribot.LLMchat.model_api.reasoning_details import extract_reasoning_details
 
 
 @dataclass(slots=True)
@@ -287,7 +288,8 @@ class LLMCoordinator():
             increase_context.add_assistant_tool_message(
                 content,
                 tool_calls = tool_calls,
-                reasoning_content = assistant_message.get("reasoning_content")
+                reasoning_content = assistant_message.get("reasoning_content"),
+                reasoning_details = extract_reasoning_details(assistant_message)
             )
 
             return await self.tool_calls_while(
@@ -302,7 +304,8 @@ class LLMCoordinator():
         increase_context.add_assistant_message(
             content = assistant_message.get("content",""),
             reasoning_content = assistant_message.get("reasoning_content"),
-            extra_content = assistant_message.get("extra_content")
+            extra_content = assistant_message.get("extra_content"),
+            reasoning_details = extract_reasoning_details(assistant_message)
          )
         
         return self._update_response(
@@ -440,13 +443,15 @@ class LLMCoordinator():
                 increase_context.add_assistant_tool_message(
                     content,
                     tool_calls,
-                    reasoning_content = assistant_message.get("reasoning_content")
+                    reasoning_content = assistant_message.get("reasoning_content"),
+                    reasoning_details = extract_reasoning_details(assistant_message)
                 )
             else:
                 increase_context.add_assistant_message(
                     content = content,
                     reasoning_content = assistant_message.get("reasoning_content"),
-                    extra_content = assistant_message.get("extra_content")
+                    extra_content = assistant_message.get("extra_content"),
+                    reasoning_details = extract_reasoning_details(assistant_message)
                 )
                 break
         else:

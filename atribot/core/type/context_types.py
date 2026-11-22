@@ -429,7 +429,8 @@ class Context():
         self, 
         content: str | None, 
         reasoning_content: str | None = None,
-        extra_content: dict | None = None #对谷歌的兼容字段
+        extra_content: dict | None = None, #对谷歌的兼容字段
+        reasoning_details: List[Dict] | None = None, #谷歌思维签名(Gemini 3/4 工具回放必需)
     ) -> None:
         """添加助手消息"""
         assistant_message = {
@@ -443,6 +444,9 @@ class Context():
         if extra_content:
             assistant_message["extra_content"] = extra_content
 
+        if reasoning_details:
+            assistant_message["reasoning_details"] = reasoning_details
+
         self.messages.append(assistant_message)
 
     def add_assistant_message_flexible(self, assistant_message: Dict) -> None:
@@ -453,7 +457,13 @@ class Context():
         """
         self.messages.append(assistant_message)
 
-    def add_assistant_tool_message(self, content: str | None, tool_calls: List[Dict], reasoning_content: str | None = None) -> None:
+    def add_assistant_tool_message(
+        self,
+        content: str | None,
+        tool_calls: List[Dict],
+        reasoning_content: str | None = None,
+        reasoning_details: List[Dict] | None = None, #谷歌思维签名(Gemini 3/4 工具回放必需)
+    ) -> None:
         """添加助手调用工具消息"""
         tool_message = {
             "role": "assistant",
@@ -464,6 +474,8 @@ class Context():
             tool_message["content"] = content
         if reasoning_content:
             tool_message["reasoning_content"] = reasoning_content
+        if reasoning_details:
+            tool_message["reasoning_details"] = reasoning_details
 
         self.messages.append(tool_message)
 
@@ -641,10 +653,17 @@ class ContextDeque:
     def add_assistant_message_flexible(self, assistant_message: Dict) -> None:
         self.messages.append(assistant_message)
 
-    def add_assistant_tool_message(self, content: str | None, tool_calls: List[Dict] = None) -> None:
+    def add_assistant_tool_message(
+        self,
+        content: str | None,
+        tool_calls: List[Dict] = None,
+        reasoning_details: List[Dict] | None = None, #谷歌思维签名(Gemini 3/4 工具回放必需)
+    ) -> None:
         msg = {"role": "assistant", "tool_calls": tool_calls}
         if content:
             msg["content"] = content
+        if reasoning_details:
+            msg["reasoning_details"] = reasoning_details
         self.messages.append(msg)
 
     def add_system_message(self, content: str) -> None:

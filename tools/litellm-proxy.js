@@ -4,13 +4,16 @@
  * 解决 Copilot 扩展的参数冲突问题。
  *
  * 已知兼容问题:
- *   - claude-opus-4-*: temperature 已弃用，需要移除
- *   claude-sonnet-5: temperature 和 top_p 均已弃用，需要移除
+ *   - claude-opus-*: temperature 已弃用，需要移除（兼容带日期/版本后缀的模型名）
+ *   - claude-sonnet-5: temperature 和 top_p 均已弃用，需要移除
  *   - claude-sonnet/haiku-4-*: temperature 和 top_p 不能同时存在，移除 top_p
  *   - gemini-*: 视觉请求需将图片转 base64 放入 image_url 字段
+ *   - gemini-*: 工具调用回放需带 thought_signature，缺失时补占位签名兜底
  *
  * 附加能力:
  *   - 实时统计每次请求的 token 消耗（命中缓存 / 未命中缓存 / 输出）
+ *   - 费用优先采用上游实报值（x-litellm-response-cost 响应头 / 流式 usage.cost），
+ *     缺失时按本地兜底费率表估算
  *   - 按模型分组累计，实时写出到同级目录 token-usage.html 看板
  *   - 为 Claude 系请求自动注入 system 消息 cache_control 断点（该网关 Claude 渠道
  *     无隐式缓存；固定断点 + 追加式对话实测稳态命中 ~94%，详见 injectCacheControl）
@@ -28,7 +31,7 @@ import { fileURLToPath } from 'node:url';
 const TARGET_HOST = 'ai-office.ztgame.com';
 const TARGET_PORT = 443;
 const TARGET_PROTOCOL = 'https:';
-const PROXY_PORT = 3001;
+const PROXY_PORT = Number(process.env.PROXY_PORT) || 3001;
 
 /** 上游 keep-alive Agent：复用 TLS 连接，减少每次请求的重复握手 */
 const UPSTREAM_AGENT = new https.Agent({
@@ -63,30 +66,52 @@ const PROMPT_LOG_LIMIT = 200;
 
 /**
  * 模型计费费率（美元 / 每百万 token）。
- *   input:  标准输入价
- *   output: 标准输出价
+ *   input:     标准输入价
+ *   output:    标准输出价
+ *   cacheRead: 可选的缓存命中单价（缺省按 input 或 input×0.1 推导）
  */
 const CACHE_INPUT_DISCOUNT = 0.1;
 const CACHE_WRITE_PREMIUM = 1.25;
+
+/**
+ * 兜底费率表（仅在拿不到上游费用时用于估算）。
+ * 数值由上游 x-litellm-response-cost-input / -output 响应头反推得出，会随网关调价漂移。
+ * 上游实报费用（响应头或 usage.cost）优先于本表。
+ */
 const PRICING = {
-  'claude-opus-4-8': { input: 5.0, output: 25.0 },
-  'claude-opus-4-7': { input: 5.0, output: 25.0 },
-  'claude-opus-4-6': { input: 5.0, output: 25.0 },
-  'claude-opus-5': { input: 5.0, output: 25.0 },
-  'claude-sonnet-5': { input: 2.0, output: 10.0 },
-  'claude-sonnet-4-6': { input: 3.0, output: 15.0 },
-  'claude-haiku-4-5': { input: 1.0, output: 5.0 },
-  'claude-fable-5': { input: 10.0, output: 50.0 },
+  'claude-opus-5-5': { input: 4.0, output: 20.0 },
+  'claude-sonnet-5-5': { input: 2.0, output: 10.0 },
+  'claude-haiku-5-5': { input: 0.1, output: 0.5 },
+  'claude-fable-5-2': { input: 8.0, output: 40.0 },
   // Gemini 系列
-  'gemini-3.5-flash': { input: 1.5, output: 9.0 },
-  'gemini-3.1-flash-lite': { input: 0.25, output: 1.5 },
-  'gemini-3.1-pro-preview': { input: 2.0, output: 12.0 },
-  'gemini-3.7-flash': { input: 0.75, output: 3.75 },
-  'gemini-3.6-flash': { input: 0.75, output: 3.75 },
-  // GPT 系列
-  'gpt-5.6-sol': { input: 5.0, output: 30.0 },
-  'gpt-5.6-terra': { input: 2.0, output: 12.0 },
-  'gpt-5.6-luna': { input: 0.2, output: 1.2 },
+  'gemini-4-argon': { input: 2.0, output: 10.0 },
+  // GPT 系列（上游对这类模型的输入侧几乎不计费，实测输入单价 ≈ 0）
+  'gpt-6-sol': { input: 0, output: 10.0 },
+  'gpt-6-astra': { input: 0, output: 50.0 },
+  'gpt-6.1-sol': { input: 0, output: 10.0 },
+  'gpt-6.1-terra': { input: 0, output: 5.0 },
+  'gpt-6-luna': { input: 0, output: 0.5 },
+  'gpt-5.6-sol': { input: 0, output: 20.0 },
+  'gpt-5.6-terra': { input: 0, output: 12.0 },
+  'gpt-5.6-luna': { input: 0, output: 1.2 },
+  // 同一批模型的 global.openai.* 别名，输出价与上面一致
+  'global.openai.gpt-6-sol': { input: 0, output: 10.0 },
+  'global.openai.gpt-6-astra': { input: 0, output: 50.0 },
+  'global.openai.gpt-6.1-sol': { input: 0, output: 10.0 },
+  'global.openai.gpt-6.1-terra': { input: 0, output: 5.0 },
+  'global.openai.gpt-6-luna': { input: 0, output: 0.5 },
+  'global.openai.gpt-5.6-sol': { input: 0, output: 20.0 },
+  'global.openai.gpt-5.6-terra': { input: 0, output: 12.0 },
+  'global.openai.gpt-5.6-luna': { input: 0, output: 1.2 },
+  // 其它
+  'deepseek-flash': { input: 0.15, output: 0.6, cacheRead: 0 },
+  'deepseek-v4-pro': { input: 0.66, output: 1.98 },
+  'kimi-k3': { input: 2.14, output: 15.0 },
+  'kimi-k3.1-pro': { input: 2.0, output: 10.0 },
+  'glm-5.3': { input: 1.19, output: 4.18 },
+  'glm-5.3-flash': { input: 0.12, output: 0.42 },
+  'glm-5.3-flashx': { input: 0.3, output: 1.04 },
+  'minimax-m3': { input: 0.3, output: 1.2 },
 };
 
 /** 统一统计模型名，避免同一模型因供应商前缀被拆分展示。 */
@@ -104,6 +129,7 @@ function getPricing(model) {
  * 计算一次请求的费用（美元）。
  * 缓存计费规则（与官方口径对齐）:
  *   - Gemini / Claude: 命中缓存输入按 CACHE_INPUT_DISCOUNT(0.1x) 计费
+ *   - 若费率表给出 cacheRead（如 deepseek 缓存命中近乎免费），优先使用该单价
  *   - Claude: 写缓存(cache_creation)按 CACHE_WRITE_PREMIUM(1.25x) 计费，
  *     其余未命中输入按标准价计费
  *   - 其它模型: 缓存无折扣，全部按标准输入价计费
@@ -118,23 +144,34 @@ function calcCost(model, u) {
   // uncached 口径里含写缓存 token，计费时拆开：写缓存按溢价、其余按标准价
   const write = Math.min(Number(u.cacheWrite) || 0, u.uncached);
   const fresh = u.uncached - write;
-  const cachedCost = (u.cached / 1e6) * p.input * readRate;
+  const cacheReadPrice = Number.isFinite(p.cacheRead) ? p.cacheRead : p.input * readRate;
+  const cachedCost = (u.cached / 1e6) * cacheReadPrice;
   const writeCost = (write / 1e6) * p.input * writeRate;
   const uncachedCost = (fresh / 1e6) * p.input;
   const outputCost = (u.output / 1e6) * p.output;
   return cachedCost + writeCost + uncachedCost + outputCost;
 }
 
-/** 按当前已知费率恢复历史费用，未知模型保留原有金额。 */
+/**
+ * 按当前费率表重算"本地估算"部分的费用，上游实报费用保持不变。
+ * 旧版统计数据只有 cost 字段（全部来自本地估算），首次加载时按现行费率迁移重算；
+ * 已经区分口径的数据不再重算，避免把上游实报的 token 重复计入估算。
+ */
 function recalculateHistoricalCosts(loadedStats) {
   for (const [model, usage] of Object.entries(loadedStats.models)) {
-    if (getPricing(model)) usage.cost = calcCost(model, usage);
+    if (usage.needsEstimateRecalc) {
+      delete usage.needsEstimateRecalc;
+      const pricing = getPricing(model);
+      usage.costEstimated = pricing ? calcCost(model, usage) : 0;
+    }
+    usage.costUpstream = Number(usage.costUpstream) || 0;
+    usage.costEstimated = Number(usage.costEstimated) || 0;
+    usage.cost = usage.costUpstream + usage.costEstimated;
   }
-  for (const usage of loadedStats.recent) {
-    if (getPricing(usage.model)) usage.cost = calcCost(usage.model, usage);
-  }
-  loadedStats.total.cost = Object.values(loadedStats.models)
-    .reduce((sum, usage) => sum + (Number(usage.cost) || 0), 0);
+  const models = Object.values(loadedStats.models);
+  loadedStats.total.costUpstream = models.reduce((sum, usage) => sum + usage.costUpstream, 0);
+  loadedStats.total.costEstimated = models.reduce((sum, usage) => sum + usage.costEstimated, 0);
+  loadedStats.total.cost = models.reduce((sum, usage) => sum + usage.cost, 0);
   return loadedStats;
 }
 
@@ -147,7 +184,8 @@ const RECENT_LIMIT = 50;
 function loadStats() {
   const fresh = {
     startedAt: Date.now(),
-    total: { cached: 0, uncached: 0, output: 0, requests: 0, cost: 0 },
+    total: { cached: 0, uncached: 0, output: 0, requests: 0, cost: 0, costUpstream: 0, costEstimated: 0 },
+    keySpend: 0,
     models: Object.create(null),
     recent: [],
   };
@@ -164,6 +202,8 @@ function loadStats() {
         cacheWrite: 0,
         output: 0,
         cost: 0,
+        costUpstream: 0,
+        costEstimated: 0,
         requests: 0,
         lastTs: 0,
       });
@@ -172,12 +212,19 @@ function loadStats() {
       merged.cacheWrite += Number(usage.cacheWrite) || 0;
       merged.output += Number(usage.output) || 0;
       merged.cost += Number(usage.cost) || 0;
+      merged.costUpstream += Number(usage.costUpstream) || 0;
+      merged.costEstimated += Number(usage.costEstimated) || 0;
+      // 旧版数据没有费用口径拆分，标记为需按现行费率重算
+      if (usage.costUpstream === undefined && usage.costEstimated === undefined) {
+        merged.needsEstimateRecalc = true;
+      }
       merged.requests += Number(usage.requests) || 0;
       merged.lastTs = Math.max(merged.lastTs, Number(usage.lastTs) || 0);
     }
     return recalculateHistoricalCosts({
       startedAt: saved.startedAt || fresh.startedAt,
       total: { ...fresh.total, ...(saved.total || {}) },
+      keySpend: Number(saved.keySpend) || 0,
       models,
       recent: Array.isArray(saved.recent)
         ? saved.recent.slice(0, RECENT_LIMIT).map(usage => ({
@@ -194,9 +241,10 @@ function loadStats() {
 /**
  * token 统计累加器
  * 结构:
- *   total:  全局汇总 { cached, uncached, output, requests, cost }
- *   models: 各模型 { [model]: { cached, uncached, output, cost, requests, lastTs } }
- *   recent: 最近若干次请求明细，用于看板列表
+ *   total:   全局汇总 { cached, uncached, output, requests, cost, costUpstream, costEstimated }
+ *   keySpend: 上游返回的密钥累计消费（x-litellm-key-spend）
+ *   models:  各模型 { [model]: { cached, uncached, cacheWrite, output, cost, costUpstream, costEstimated, requests, lastTs } }
+ *   recent:  最近若干次请求明细 { model, cached, uncached, output, cost, costFrom, ts }
  */
 const stats = loadStats();
 
@@ -244,18 +292,28 @@ function extractUsage(usage) {
 
 /**
  * 把一次请求的 usage 计入统计并刷新看板。
+ * @param {string} model 请求的模型名
+ * @param {object} usage 上游返回的 usage 对象
+ * @param {number} [upstreamCost] 上游实报费用（响应头 / usage.cost），命中时优先采信
  */
-function recordUsage(model, usage) {
+function recordUsage(model, usage, upstreamCost) {
   const u = extractUsage(usage);
   if (!u) return;
 
   const normalizedModel = normalizeModelName(model);
-  const cost = calcCost(normalizedModel, u);
+  const reported = Number(upstreamCost);
+  const fromUpstream = Number.isFinite(reported) && reported > 0;
+  const cost = fromUpstream ? reported : calcCost(normalizedModel, u);
 
   stats.total.cached += u.cached;
   stats.total.uncached += u.uncached;
   stats.total.output += u.output;
   stats.total.cost += cost;
+  if (fromUpstream) {
+    stats.total.costUpstream = (stats.total.costUpstream || 0) + cost;
+  } else {
+    stats.total.costEstimated = (stats.total.costEstimated || 0) + cost;
+  }
   stats.total.requests += 1;
 
   const m = (stats.models[normalizedModel] ??= {
@@ -263,6 +321,8 @@ function recordUsage(model, usage) {
     uncached: 0,
     output: 0,
     cost: 0,
+    costUpstream: 0,
+    costEstimated: 0,
     requests: 0,
     lastTs: 0,
   });
@@ -271,15 +331,26 @@ function recordUsage(model, usage) {
   m.cacheWrite = (m.cacheWrite || 0) + (u.cacheWrite || 0);
   m.output += u.output;
   m.cost += cost;
+  if (fromUpstream) {
+    m.costUpstream = (m.costUpstream || 0) + cost;
+  } else {
+    m.costEstimated = (m.costEstimated || 0) + cost;
+  }
   m.requests += 1;
   m.lastTs = Date.now();
 
-  stats.recent.unshift({ model: normalizedModel, ...u, cost, ts: Date.now() });
+  stats.recent.unshift({
+    model: normalizedModel,
+    ...u,
+    cost,
+    costFrom: fromUpstream ? 'upstream' : 'estimated',
+    ts: Date.now(),
+  });
   if (stats.recent.length > RECENT_LIMIT) stats.recent.length = RECENT_LIMIT;
 
   if (!/embed/i.test(normalizedModel)) {
     console.log(
-      `[stats] ${normalizedModel} 命中缓存=${u.cached} 未命中=${u.uncached} 输出=${u.output} 费用=$${cost.toFixed(4)}`
+      `[stats] ${normalizedModel} 命中缓存=${u.cached} 未命中=${u.uncached} 输出=${u.output} 费用=$${cost.toFixed(4)} (${fromUpstream ? '上游实报' : '本地估算'})`
     );
   }
 
@@ -288,14 +359,22 @@ function recordUsage(model, usage) {
 }
 
 /**
- * 从流式 (SSE) 或整段 JSON 响应文本中尽量解析出 usage。
- * 流式响应里 usage 通常出现在最后几个 data: chunk 中。
+ * 从流式 (SSE) 或整段 JSON 响应文本中尽量解析出 usage 与上游费用。
+ *   - OpenAI 格式流式的最后一个 chunk 会带 usage（可能含 cost 字段）
+ *   - Anthropic 格式流式的 usage 出现在 message_start / message_delta 中，不带费用
+ * @returns {{usage: object, cost: number} | null}
  */
 function parseUsageFromResponse(text) {
+  const pick = (usage) => {
+    if (!usage) return null;
+    // LiteLLM 在 OpenAI 格式流式 usage 中会追加 cost 字段
+    return { usage, cost: Number(usage.cost) || 0 };
+  };
+
   // 先尝试整段 JSON（非流式）
   try {
     const json = JSON.parse(text);
-    if (json.usage) return json.usage;
+    if (json.usage) return pick(json.usage);
   } catch {
     // 非整段 JSON，按 SSE 逐行扫描
   }
@@ -309,7 +388,7 @@ function parseUsageFromResponse(text) {
     if (!payload || payload === '[DONE]') continue;
     try {
       const obj = JSON.parse(payload);
-      if (obj.usage) found = obj.usage; // 取最后一个带 usage 的 chunk
+      if (obj.usage) found = pick(obj.usage) ?? found; // 取最后一个带 usage 的 chunk
     } catch {
       // 单行无法解析，跳过
     }
@@ -339,17 +418,20 @@ function writeStatsHtml() {
  * 参数清洗：按模型规则移除冲突参数
  *
  * 各模型参数限制（基于 Vertex AI / LiteLLM 错误反馈）:
- *   opus-4-8 / opus-4-7 / opus-5: temperature 和 top_p 均已弃用
- *   opus-4-6:                   temperature 已弃用，top_p 正常
+ *   opus-*:                     temperature 已弃用（全系移除）
+ *   opus-4-7 / opus-4-8 / opus-5+: 追加移除 top_p
  *   sonnet-5:                   temperature 和 top_p 均已弃用
  *   其它(sunset/haiku):  temperature 和 top_p 不能同时存在
  *   gemini-*:            无需特殊参数清洗，透传即可
+ *
+ * 注意：模型名可能带日期或版本后缀（如 claude-opus-4-8-20251101-v1:0），
+ * 因此匹配时不能用 `$` 锚定，需用 `\b` 或前缀匹配。
  */
 function sanitizeParams(json) {
   const model = json.model || 'unknown';
-  const isOpus48or47or5 = /opus-(?:4-[87]|5)$/.test(model);
-  const isOpus46 = /opus-4-6$/.test(model);
-  const isSonnet5 = /sonnet-5$/.test(model);
+  const isOpus = /opus/i.test(model);
+  const isOpusNoTopP = /opus-(?:4-[789]|[5-9])/i.test(model);
+  const isSonnet5 = /sonnet-5\b/i.test(model);
   const isGemini = /^gemini/i.test(model);
 
   // 流式请求默认不返回 usage，需显式开启 include_usage 才能在 SSE 末尾拿到统计
@@ -360,24 +442,14 @@ function sanitizeParams(json) {
   // Gemini 系列无需额外参数清洗，透传即可
   if (isGemini) return json;
 
-  // Opus 4.8 / 4.7 / 5：temperature 和 top_p 都已弃用，全部移除
-  if (isOpus48or47or5) {
+  // Opus 全系：temperature 已弃用，移除；4.7/4.8/5+ 同时移除 top_p
+  if (isOpus) {
     if (json.temperature !== undefined) {
       delete json.temperature;
       console.log(`[proxy] 已移除 temperature (model=${model})`);
     }
-    if (json.top_p !== undefined) {
+    if (isOpusNoTopP && json.top_p !== undefined) {
       delete json.top_p;
-      console.log(`[proxy] 已移除 top_p (model=${model})`);
-    }
-    return json;
-  }
-
-  // Opus 4.6：temperature 已弃用，移除 temperature
-  if (isOpus46) {
-    if (json.temperature !== undefined) {
-      delete json.temperature;
-      console.log(`[proxy] 已移除 temperature (model=${model})`);
     }
     return json;
   }
@@ -390,7 +462,6 @@ function sanitizeParams(json) {
     }
     if (json.top_p !== undefined) {
       delete json.top_p;
-      console.log(`[proxy] 已移除 top_p (model=${model})`);
     }
     return json;
   }
@@ -398,7 +469,90 @@ function sanitizeParams(json) {
   // 其它模型（Sonnet / Haiku）：temperature 和 top_p 不能同时存在
   if (json.temperature !== undefined && json.top_p !== undefined) {
     delete json.top_p;
-    console.log(`[proxy] 已移除 top_p (model=${model}, temperature=${json.temperature})`);
+  }
+
+  return json;
+}
+
+/**
+ * Gemini thought signature（思维签名）占位值。
+ * Google 文档给出的“跳过校验”占位串，缺失真签名时用它兜底，
+ * 代价是模型会丢失该轮的工具调用思考上下文（详见 injectThoughtSignatures）。
+ */
+const DUMMY_THOUGHT_SIGNATURE = Buffer.from('skip_thought_signature_validator').toString('base64');
+
+/**
+ * Gemini 工具调用的思维签名兼容处理
+ *
+ * 背景（实测结论）:
+ *   - Gemini 3/4 回放 functionCall 历史时必须原样带回 thoughtSignature，否则 400。
+ *   - 该签名不属于 OpenAI 规范字段，网关响应里放在
+ *     `message.provider_specific_fields.reasoning_details`（或 delta 顶层 reasoning_details），
+ *     而请求侧只认 assistant 消息顶层的 `reasoning_details`，且 `text` 必须等于工具名。
+ *   - 只有“末尾悬空”的那批 functionCall 会被校验：即最后一条带 tool_calls 的 assistant
+ *     之后全是 tool 结果（或没有后续消息）时才需要签名；后面接了新的 user 消息就不再校验。
+ *
+ * 因此这里做两件事:
+ *   1. 把 provider_specific_fields.reasoning_details 提升到顶层，
+ *      修复“客户端原样回传响应对象仍然 400”的问题；
+ *   2. 缺失签名时补占位签名，避免整条请求失败（机器人自己会回传真签名，这里只是兜底）。
+ */
+function injectThoughtSignatures(json) {
+  const model = String(json?.model || '');
+  // 只有 Gemini 系模型校验 thought signature
+  if (!/gemini/i.test(model)) return json;
+
+  const messages = json.messages;
+  if (!Array.isArray(messages) || messages.length === 0) return json;
+
+  // 1) 签名从 provider_specific_fields 提升到消息顶层
+  for (const msg of messages) {
+    if (!msg || msg.role !== 'assistant') continue;
+    const nested = msg.provider_specific_fields?.reasoning_details;
+    if (!Array.isArray(nested) || nested.length === 0) continue;
+    const own = msg.reasoning_details;
+    if (!Array.isArray(own) || own.length === 0) {
+      msg.reasoning_details = nested;
+      console.log(`[proxy] 已把 provider_specific_fields.reasoning_details 提升到顶层 (model=${model})`);
+    }
+  }
+
+  // 2) 只处理末尾悬空的 functionCall 段
+  let targetIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg?.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+      targetIndex = i;
+      break;
+    }
+  }
+  if (targetIndex === -1) return json;
+
+  const tail = messages.slice(targetIndex + 1);
+  const dangling = tail.length === 0 || tail.every(m => m?.role === 'tool');
+  if (!dangling) return json;
+
+  const target = messages[targetIndex];
+  const firstToolName = target.tool_calls[0]?.function?.name || 'tool';
+  const entries = Array.isArray(target.reasoning_details) ? target.reasoning_details : [];
+  const signed = entries.find(e => e && typeof e.signature === 'string' && e.signature);
+
+  if (!signed) {
+    target.reasoning_details = [{
+      type: 'tool',
+      text: firstToolName,
+      signature: DUMMY_THOUGHT_SIGNATURE,
+    }];
+    console.log(
+      `[proxy] 已补占位 thought_signature (model=${model}, tool=${firstToolName})，该轮工具思考上下文将丢失`
+    );
+    return json;
+  }
+
+  // 网关按 text 匹配工具名，名称不一致同样会 400
+  if (signed.type === 'tool' && signed.text !== firstToolName) {
+    signed.text = firstToolName;
+    console.log(`[proxy] 已修正 thought_signature 的 text -> ${firstToolName} (model=${model})`);
   }
 
   return json;
@@ -584,8 +738,8 @@ const server = http.createServer((req, res) => {
     let reqJson = null;
     try {
       reqJson = JSON.parse(body);
-      // 参数清洗后注入 Claude system 缓存断点（其余模型原样返回）
-      const json = injectCacheControl(sanitizeParams(reqJson));
+      // 参数清洗 → Gemini 思维签名兼容 → Claude system 缓存断点（其余模型原样返回）
+      const json = injectCacheControl(injectThoughtSignatures(sanitizeParams(reqJson)));
       reqModel = json.model || 'unknown';
       modifiedBody = JSON.stringify(json);
     } catch {
@@ -651,6 +805,11 @@ const server = http.createServer((req, res) => {
 
         let collected = '';
         const isError = proxyRes.statusCode && proxyRes.statusCode >= 400;
+        // LiteLLM 非流式响应会带上权威费用；流式时该头在生成前发出，恒为 0
+        const headerCost = Number(proxyRes.headers['x-litellm-response-cost']) || 0;
+        // 该密钥在上游的累计消费，可用于核对本地累计是否偏离
+        const keySpend = Number(proxyRes.headers['x-litellm-key-spend']);
+        if (Number.isFinite(keySpend) && keySpend > 0) stats.keySpend = keySpend;
 
         proxyRes.on('error', (err) => {
           console.error(`[proxy] 上游响应中断: ${err.message}, model=${reqModel}, statusCode=${proxyRes.statusCode}`);
@@ -668,8 +827,9 @@ const server = http.createServer((req, res) => {
           if (isError) {
             console.error(`[proxy] 上游错误 ${proxyRes.statusCode}:`, collected.slice(0, 500));
           } else {
-            const usage = parseUsageFromResponse(collected);
-            if (usage) recordUsage(reqModel, usage);
+            const parsed = parseUsageFromResponse(collected);
+            // 上游实报优先：usage.cost（OpenAI 流式）> 响应头（非流式）；都没有则本地估算
+            if (parsed) recordUsage(reqModel, parsed.usage, parsed.cost || headerCost);
           }
           resolve();
         });
@@ -721,7 +881,7 @@ function renderStatsHtml() {
           <td class="num uncached">${numberFmt.format(m.uncached)}</td>
           <td class="num output">${numberFmt.format(m.output)}</td>
           <td class="num total">${numberFmt.format(m.sum)}</td>
-          <td class="num cost">${fmtCost(m.cost)}</td>
+          <td class="num cost" title="上游实报 ${fmtCost(m.costUpstream || 0)} · 本地估算 ${fmtCost(m.costEstimated || 0)}">${fmtCost(m.cost)}</td>
         </tr>`)
     .join('');
 
@@ -734,7 +894,7 @@ function renderStatsHtml() {
           <td class="num cached">${numberFmt.format(r.cached)}</td>
           <td class="num uncached">${numberFmt.format(r.uncached)}</td>
           <td class="num output">${numberFmt.format(r.output)}</td>
-          <td class="num cost">${fmtCost(r.cost)}</td>
+          <td class="num cost" title="${r.costFrom === 'upstream' ? '上游实报' : '本地估算'}">${fmtCost(r.cost)}</td>
         </tr>`)
     .join('');
 
@@ -831,6 +991,12 @@ function renderStatsHtml() {
   .card.output .value { color: var(--output); }
   .card.total .value { color: var(--primary-deep); }
   .card.cost .value { color: var(--cost); }
+  .card .note {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 6px;
+    white-space: nowrap;
+  }
   /* 区块标题 */
   .section-title {
     font-size: 20px;
@@ -905,6 +1071,7 @@ function renderStatsHtml() {
     <div class="meta">
       首次统计于 ${new Date(stats.startedAt).toLocaleString('zh-CN')} ·
       累计 <span class="badge">${numberFmt.format(t.requests)} 次请求</span> ·
+      上游密钥累计消费 <span class="badge">${fmtCost(stats.keySpend || 0)}</span> ·
       数据跨重启累计 · 页面每 5 秒自动刷新
     </div>
   </div>
@@ -933,6 +1100,7 @@ function renderStatsHtml() {
     <div class="card cost">
       <div class="label">累计费用 (USD)</div>
       <div class="value">${fmtCost(t.cost)}</div>
+      <div class="note">上游实报 ${fmtCost(t.costUpstream || 0)} · 本地估算 ${fmtCost(t.costEstimated || 0)}</div>
     </div>
   </div>
 
@@ -984,8 +1152,5 @@ server.listen(PROXY_PORT, '127.0.0.1', () => {
   console.log(`[proxy] LiteLLM 参数兼容代理已启动`);
   console.log(`[proxy] 监听地址: http://127.0.0.1:${PROXY_PORT}`);
   console.log(`[proxy] 上游网关: http://${TARGET_HOST}:${TARGET_PORT}`);
-  console.log(`[proxy] 支持的模型: Claude Opus 4 / Sonnet 4 / Sonnet 5 / Haiku 4 系列 及 Gemini 系列`);
-  console.log(`[proxy] 规则: Opus 4/5 / Sonnet 5 -> 移除 temperature & top_p; 其它 -> 冲突时移除 top_p`);
   console.log(`[proxy] Token 看板: ${STATS_HTML_PATH}`);
-  console.log(`[proxy] 连接复用: keep-alive Agent 已启用，瞬时断连自动重试 ${UPSTREAM_MAX_RETRIES} 次`);
 });

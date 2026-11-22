@@ -307,6 +307,8 @@ class AssistantMessage(BaseMessage):
     reasoning_content: Optional[str] = None
     extra_content: Optional[Dict[str, Any]] = None
     tool_calls: Optional[List[Dict[str, Any]]] = None
+    reasoning_details: Optional[List[Dict[str, Any]]] = None
+    """Gemini thought signature 等签名条目,回放历史时必须原样带回"""
     _cached_openai_dict: Dict[str, Any] = field(init=False)
 
     def __post_init__(self):
@@ -319,6 +321,8 @@ class AssistantMessage(BaseMessage):
             res["extra_content"] = self.extra_content
         if self.tool_calls is not None:
             res["tool_calls"] = self.tool_calls
+        if self.reasoning_details:
+            res["reasoning_details"] = self.reasoning_details
         self._cached_openai_dict = res
 
     def to_openai_dict(self) -> Dict[str, Any]:

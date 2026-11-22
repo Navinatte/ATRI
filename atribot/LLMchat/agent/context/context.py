@@ -198,7 +198,8 @@ class AgentContext(BaseContext):
         content: Optional[str] = None,
         reasoning_content: Optional[str] = None,
         extra_content: Optional[Dict[str, Any]] = None,
-        tool_calls: Optional[List[Dict[str, Any]]] = None
+        tool_calls: Optional[List[Dict[str, Any]]] = None,
+        reasoning_details: Optional[List[Dict[str, Any]]] = None
     ) -> None:
         """快捷添加助手消息
 
@@ -207,13 +208,15 @@ class AgentContext(BaseContext):
             reasoning_content (Optional[str]): 模型思考内容
             extra_content (Optional[Dict[str, Any]]): 兼容字段
             tool_calls (Optional[List[Dict[str, Any]]]): 工具调用信息
+            reasoning_details (Optional[List[Dict[str, Any]]]): Gemini thought signature 等签名条目
         """
         self._messages.append(
             AssistantMessage(
                 content=content,
                 reasoning_content=reasoning_content,
                 extra_content=extra_content,
-                tool_calls=tool_calls
+                tool_calls=tool_calls,
+                reasoning_details=reasoning_details
             )
         )
 

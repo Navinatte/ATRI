@@ -9,6 +9,7 @@ from atribot.common_utils import (
     AUDIO_EXTENSIONS,
     refresh_image_download_url,
     url_to_audio_mp3,
+    url_to_image_jpeg,
     url_to_video_mp4,
 )
 from atribot.core.atri_config import atriConfig
@@ -40,6 +41,8 @@ from atribot.LLMchat.memory.memory_system import MemorySystem
 DEFAULT_INCLUDING_PICTURES = 2
 DEFAULT_INCLUDING_AUDIOS = 5
 DEFAULT_INCLUDING_VIDEOS = 1
+# 历史图片内联 base64 前的压缩上限(KB)
+DEFAULT_INLINE_IMAGE_MAX_KB = 1024
 
 if TYPE_CHECKING:
     from atribot.core.type.bot_types import atriMessageEvent
@@ -461,15 +464,23 @@ class ChatManager(ServiceBase):
                             send_client,
                             self.logger,
                         )
+                        # 必须内联 base64:网关不接受 QQ CDN 直链(无图片扩展名 + 上游抓不到)
+                        converted = None
                         if new_url:
-                            builder.add_image_left(new_url)
+                            converted = await url_to_image_jpeg(
+                                new_url,
+                                max_size_kb=DEFAULT_INLINE_IMAGE_MAX_KB,
+                                file_name=segment.file_name,
+                            )
+                        if converted is not None:
+                            builder.add_image_base64_left(converted.data, converted.mime)
                         elif segment.text_description or segment.summary:
                             desc = segment.text_description or segment.summary
                             builder.add_text_left(
                                 f"[CQ:image,file={segment.file_name or 'unknown'},summary:{desc}]"
                             )
                         else:
-                            # 刷新失败:降级为文本,不要直接把过期 URL 传给 LLM
+                            # 下载或转码失败:降级为文本,不要直接把过期 URL 传给 LLM
                             builder.add_text_left(
                                 f"[CQ:image,file={segment.file_name or 'unknown'},summary=图片已过期无法识别]"
                             )

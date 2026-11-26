@@ -15,7 +15,56 @@ from websockets.legacy.server import Serve, WebSocketServerProtocol
 from websockets.legacy.server import WebSocketServer as WSServer
 
 
-class OneBotWSClient:
+class _ListenerDispatcher:
+    """把监听器回调从接收循环里解耦
+
+    WS 接收循环既负责读取事件，也负责读取 action 的 echo 回包。
+    如果直接在接收循环里 ``await`` 监听器，而监听器又调用 API 等待 echo，
+    两边就会互相等待，直到 echo 超时（表现为“拉取合并转发超时(8.0s)”）。
+
+    这里改成：接收循环只把事件放进内部队列，由独立任务按序执行监听器。
+    """
+
+    _dispatch_queue: asyncio.Queue | None = None
+    _dispatch_task: Task | None = None
+    _listeners: list[Callable]
+
+    async def _dispatch_worker(self) -> None:
+        queue = self._dispatch_queue
+        while queue is not None:
+            data = await queue.get()
+            try:
+                for listener in list(self._listeners):
+                    await self._safe_callback(listener, data)
+            finally:
+                queue.task_done()
+
+    def _ensure_dispatcher(self) -> None:
+        if self._dispatch_task is None or self._dispatch_task.done():
+            self._dispatch_queue = asyncio.Queue()
+            self._dispatch_task = create_task(
+                self._dispatch_worker(), name="OneBot.event_dispatch"
+            )
+
+    async def _enqueue_event(self, data: dict) -> None:
+        """把事件交给独立的分发任务（不阻塞接收循环）"""
+        self._ensure_dispatcher()
+        queue = self._dispatch_queue
+        if queue is None:
+            return
+        await queue.put(data)
+
+    def _stop_dispatcher(self) -> None:
+        task, self._dispatch_task = self._dispatch_task, None
+        self._dispatch_queue = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _safe_callback(self, callback: Callable, data: dict) -> None:  # pragma: no cover
+        raise NotImplementedError
+
+
+class OneBotWSClient(_ListenerDispatcher):
     """OneBot WebSocket 正向连接客户端"""
 
     def __init__(
@@ -107,6 +156,7 @@ class OneBotWSClient:
         except Exception as e:
             self.log.exception("事件循环异常: %s", e)
         finally:
+            self._stop_dispatcher()
             self._running = False
 
     async def _receive_messages(self) -> None:
@@ -128,8 +178,8 @@ class OneBotWSClient:
                             future.set_result(data)
                     continue
 
-                for listener in self._listeners:
-                    await self._safe_callback(listener, data)
+                # echo 只能由本循环读取，因此事件必须交给独立任务分发
+                await self._enqueue_event(data)
 
             except json.JSONDecodeError as e:
                 self.log.error("JSON 解析错误: %s", e)
@@ -217,6 +267,8 @@ class OneBotWSClient:
         if self._tasks:
             await gather(*self._tasks, return_exceptions=True)
 
+        self._stop_dispatcher()
+
         # 关闭 WebSocket 连接
         if self.websocket:
             await self.websocket.close()
@@ -242,7 +294,7 @@ class OneBotWSClient:
         return self._running
 
 
-class OneBotWSServer:
+class OneBotWSServer(_ListenerDispatcher):
     """OneBot WebSocket 反向连接服务端"""
 
     def __init__(
@@ -328,8 +380,8 @@ class OneBotWSServer:
                                 future.set_result(data)
                         continue
 
-                    for listener in self._listeners:
-                        await self._safe_callback(listener, data)
+                    # echo 只能由本循环读取，事件交给独立任务分发
+                    await self._enqueue_event(data)
 
                 except json.JSONDecodeError as e:
                     self.log.error("JSON 解析错误: %s", e)
@@ -339,6 +391,7 @@ class OneBotWSServer:
         except Exception as e:
             self.log.error("连接处理异常: %s", e)
         finally:
+            self._stop_dispatcher()
             if self.websocket == websocket:
                 self.websocket = None
                 self._connected.clear()
@@ -443,6 +496,8 @@ class OneBotWSServer:
                 task.cancel()
         if self._tasks:
             await gather(*self._tasks, return_exceptions=True)
+
+        self._stop_dispatcher()
 
         # 关闭客户端连接
         if self.websocket and self.websocket.open:

@@ -4,7 +4,7 @@
     "platforms": {
         # connection_type 决定用哪个配置, 三种模式:
         #WebSocket_client
-        "napcat": {#这个目前只有napcat
+        "napcat": {
             "adapter": "onebot",
             "connection_type": "WebSocket_client",
             "access_token": "ATRI114514",
@@ -12,6 +12,16 @@
             "enabled": True,               # 可选,默认 true
             "source_name": ""              # 可选,空=取平台名
         },
+        "luckylillia": {
+            "adapter": "luckylillia",
+            "connection_type": "WebSocket_client",
+            "access_token": "",
+            "url": "127.0.0.1:8094",
+            "enabled": False,
+            "source_name": ""
+        },
+
+        
         #WebSocket_server
         "napcat_server": {#如果要用这个连接方式记得把napcat_server改成napcat
             "adapter": "onebot",

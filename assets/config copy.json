@@ -7,6 +7,14 @@
             "url": "127.0.0.1:8888",
             "enabled": true,
             "source_name": ""
+        },
+        "luckylillia": {
+            "adapter": "luckylillia",
+            "connection_type": "WebSocket_client",
+            "access_token": "",
+            "url": "127.0.0.1:8094",
+            "enabled": false,
+            "source_name": ""
         }
     },
     "root_user_id": 114514,
